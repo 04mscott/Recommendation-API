@@ -1,8 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 from sqlalchemy import create_engine, text
-from pydub import AudioSegment
+from pydub.utils import mediainfo
 from dotenv import load_dotenv
-from pytubefix import YouTube
 from requests import get
 import mysql.connector
 import librosa as lr
@@ -49,14 +48,18 @@ def get_auth_header(token: str):
     return {'Authorization': 'Bearer ' + token}
     
 def connect_to_db():
-    db_connection = mysql.connector.connect(
+    conn = mysql.connector.connect(
         host=db_host,
         user=db_user,
         password=db_password,
         database=db_name
     )
-    return db_connection.cursor()
+    return conn
     
+def get_engine():
+    connection_string = f'mysql+pymysql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}'
+    return create_engine(connection_string)
+
 # Returns 7 pandas dataframes to be added to database
 # Table 1: Users
 # Table 2: Songs
@@ -104,11 +107,16 @@ def get_init_tables(token: str):
     end_time = time.time()
     print(f'Completed in {end_time - start_time} seconds\n')
 
+    start_time = time.time()
+    result = get_all_playlist_tracks(headers, user_id, result)
+    end_time = time.time()
+    print(f'Completed in {end_time - start_time} seconds\n')
+
     for key in result:
         result[key] = result[key].drop_duplicates()
 
     start_time = time.time()
-    result = get_previews(result)
+    result = get_previews(result, download=False)
     end_time = time.time()
     print(f'Completed in {end_time - start_time} seconds\n')
         
@@ -131,17 +139,7 @@ def get_user_info(token: str):
     return pd.DataFrame.from_dict({
         'user_id': [json_response['id']], 
         'email': [json_response['email']], 
-        'profile_img_url': [json_response['images'][0]['url'] if json_response['images'] != [] else ''],
-        'top_song_id_1': [''],
-        'top_song_id_2': [''],
-        'top_song_id_3': [''],
-        'top_song_id_4': [''],
-        'top_song_id_5': [''],
-        'top_song_id_6': [''],
-        'top_song_id_7': [''],
-        'top_song_id_8': [''],
-        'top_song_id_9': [''],
-        'top_song_id_10': ['']
+        'profile_img_url': [json_response['images'][0]['url'] if json_response['images'] != [] else '']
     })
 
 def get_top(headers: dict, user_id: str, result: dict, limit=50, top_artists=True):
@@ -163,10 +161,7 @@ def get_top(headers: dict, user_id: str, result: dict, limit=50, top_artists=Tru
     song_artist_interaction_list = []
     for i, item in enumerate(json_response['items']):
         songs_list.append([item['id'], item['name'], item['album']['images'][0]['url'], '']) # Add song to songs list
-        user_song_interactions_list.append([user_id, item['id'], False, True, False]) # Add User Song interaction
-
-        if i < 10:
-            result['users'].loc(result['users']['user_id'] == user_id, f'top_song_id_{i+1}') = item['id'] # Store top ten tracks, in order, in the users table
+        user_song_interactions_list.append([user_id, item['id'], False, i, False]) # Add User Song interaction
             
         for artist in item['artists']:
             artists_list.append([artist['id'], artist['name']]) # Add Artist(s) to artists list
@@ -189,9 +184,9 @@ def get_top(headers: dict, user_id: str, result: dict, limit=50, top_artists=Tru
 
         artists_list = []
         user_artist_interaction_list = []
-        for item in json_response['items']:
+        for i, item in enumerate(json_response['items']):
             artists_list.append([item['id'], item['name']]) # Add artist to artists list
-            user_artist_interaction_list.append([user_id, item['id'], False, True]) # Add User Artist interaction
+            user_artist_interaction_list.append([user_id, item['id'], False, i]) # Add User Artist interaction
 
         result['artists'] = pd.concat([result['artists'], pd.DataFrame(data=artists_list, columns=result['artists'].columns)])
         result['user_artist_interactions'] = pd.concat([result['user_artist_interactions'], pd.DataFrame(data=user_artist_interaction_list, columns=result['user_artist_interactions'].columns)])
@@ -235,7 +230,7 @@ def get_all_saved_tracks(headers: dict, user_id: str, result: dict):
                 index = matching_rows.index[0]
                 result['user_song_interactions'].at[index, 'saved'] = True 
             else:
-                user_song_interactions_list.append([user_id, track['id'], True, False, False])
+                user_song_interactions_list.append([user_id, track['id'], True, None, False])
             
             for artist in track['artists']:
                 artists_list.append([artist['id'], artist['name']]) # Add Artist(s)
@@ -326,7 +321,7 @@ def get_all_playlist_tracks(headers: dict, user_id: str, result: dict, print_res
                             index = matching_rows.index[0]
                             result['user_song_interactions'].at[index, 'playlist'] = True 
                         else:
-                            user_song_interactions_list.append([user_id, track['id'], False, False, True])
+                            user_song_interactions_list.append([user_id, track['id'], False, None, True])
 
                         # Add artists to table
                         for artist in track['artists']:
@@ -371,7 +366,7 @@ def get_followed_artists(headers: dict, user_id: str, result: dict):
                     index = matching_rows.index[0]
                     result['user_artist_interactions'].at[index, 'follows'] = True 
                 else:
-                    user_artist_interactions_list.append([user_id, item['id'], True, False])
+                    user_artist_interactions_list.append([user_id, item['id'], True, None])
                 after = item['id']
 
         if json_response['artists']['next']:
@@ -561,38 +556,64 @@ def add_df_to_db(dfs: dict):
             conn.commit()
 
         print(f'ARTIST <-> GENRE data inserted successfully')
-    
-def get_artist_name(songs: pd.DataFrame, artists: pd.DataFrame, song_artist_interactions: pd.DataFrame, print_results=False):
-    song_ids = songs['song_id'].to_list()
-    result = {}
-    for song_id in song_ids:
-        song_title = songs[songs['song_id'] == song_id]['title'].values[0]
-        artist_id = song_artist_interactions[song_artist_interactions['song_id'] == song_id]['artist_id'].values[0]
-        artist_name = artists[artists['artist_id'] == artist_id]['name'].values[0]
-        result[song_id] = (song_title, artist_name)
-        if print_results:
-            print(f'{song_title} <-> {artist_name}')
-            print(f'{song_id} <-> {artist_id}\n')
-    return result
 
-def fetch_urls_for_batch(batch, songs, artists, user_artist_interactions):
+def get_artist_name(song_ids: list, result: dict):
+
+    if not song_ids:
+        print('song_ids empty')
+        return {}
     
-    names = get_artist_name(songs[songs['song_id'].isin(batch)], artists, user_artist_interactions)
+    s_df = result['songs']
+    a_df = result['artists']
+    sai_df = result['song_artist_interactions']
+    
+    song_artists = {}
+    for song_id in song_ids:
+        song_row = s_df[s_df['song_id'] == song_id]
+        if not song_row.empty:
+            song_title = song_row.iloc[0]['title']
+        else:
+            print(f"Song ID {song_id} not found in songs data")
+            continue
+        artist_ids = sai_df[sai_df['song_id'] == song_id]['artist_id'].tolist()
+        artist_names = []
+        for artist_id in artist_ids:
+            artist_row = a_df[a_df['artist_id'] == artist_id]
+            if not artist_row.empty:
+                artist_names.append(artist_row.iloc[0]['name'])
+            else:
+                print(f"Artist ID {artist_id} not found in artists data")
+        if song_id in song_artists:
+            song_artists[song_id][1].extend(artist_names)
+        else:
+            song_artists[song_id] = (song_title, artist_names)
+
+    return song_artists
+
+
+
+    return song_artists
+
+def fetch_urls_for_batch(batch, result):
+    
+    names = get_artist_name(batch, result)
 
     def fetch_url(song_id):
-        song_title, artist_name = names[song_id]
-        query = f'{song_title} by {artist_name} official audio'
-        cmd = ["yt-dlp", f"ytsearch:{query}", "--print", "webpage_url"]
+        if song_id in names:
+            song_title, artist_names = names[song_id]
+            artist_name = artist_names[0]
+            query = f'{song_title} by {artist_name} official audio'
+            cmd = ["yt-dlp", f"ytsearch:{query}", "--print", "webpage_url"]
 
-        try:
-            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            if result.returncode == 0:
-                url = result.stdout.strip().split("\n")[0]
-                return song_id, url
-            else:
-                print(f"Error fetching URL for {song_id}: {result.stderr.strip()}")
-        except Exception as e:
-            print(f"Exception fetching URL for {song_id}: {e}")
+            try:
+                result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                if result.returncode == 0:
+                    url = result.stdout.strip().split("\n")[0]
+                    return song_id, url
+                else:
+                    print(f"Error fetching URL for {song_id}: {result.stderr.strip()}")
+            except Exception as e:
+                print(f"Exception fetching URL for {song_id}: {e}")
 
         return song_id, ''
     
@@ -626,6 +647,7 @@ def download_audio(song_id, url, folder_path):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
         print(f"Downloaded: {url}")
+        return os.path.join(folder_path, f'{song_id}.wav')
     except Exception as e:
         print(f"Error downloading {url}: {e}")
 
@@ -636,7 +658,7 @@ def fetch_all_urls(batches, result):
     for i, batch in enumerate(batches):
         start_time = time.time()
         
-        batch_urls = fetch_urls_for_batch(batch, result['songs'], result['artists'], result['song_artist_interactions'])
+        batch_urls = fetch_urls_for_batch(batch, result)
         
         end_time = time.time()
         print(f'Batch {i + 1} completed in {end_time - start_time:.2f} seconds')
@@ -645,7 +667,7 @@ def fetch_all_urls(batches, result):
     
     return all_urls    
 
-def get_previews(result: dict, folder_path: str, batch_size=20, max_workers=4):
+def get_previews(result: dict, folder_path=None, download=True, batch_size=20, max_workers=4):
     """Process songs in batches to get preview URLs."""
     
     print('-----------------Getting Preview URLs-----------------')
@@ -654,6 +676,7 @@ def get_previews(result: dict, folder_path: str, batch_size=20, max_workers=4):
     
     # Split song IDs into batches
     batches = [song_ids[i:i + batch_size] for i in range(0, len(song_ids), batch_size)]
+    # print(batches)
 
     print(f'Processing {len(batches)} batch{"es" if len(batches) > 1 else ""}...')
     
@@ -663,10 +686,11 @@ def get_previews(result: dict, folder_path: str, batch_size=20, max_workers=4):
     for song_id, url in urls.items():
         result['songs'].loc[result['songs']['song_id'] == song_id, 'preview_url'] = url
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(download_audio, song_id, url, folder_path) for song_id, url in urls.items()]
-        for future in futures:
-            future.result()
+    if download:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(download_audio, song_id, url, folder_path) for song_id, url in urls.items()]
+            for future in futures:
+                future.result()
 
     return result
 
@@ -708,84 +732,145 @@ def load_tables(tables=['users', 'songs', 'artists', 'artist_genres', 'user_song
     print('\nData successfully loaded\n')
     return result
 
+def load_user_tables(user_id: str):
+    query = '''
+        SELECT 
+            s.*,
+            a.*
+        FROM
+            user_song_interactions usi
+        JOIN 
+            songs s ON usi.song_id = s.song_id
+        JOIN 
+            song_artist_interactions sai ON s.song_id = sai.song_id
+        JOIN 
+            artists a ON sai.artist_id = a.artist_id
+        WHERE 
+            usi.user_id = %s;
+    '''
+
+    conn = connect_to_db()
+    cursor = conn.cursor()
+    cursor.execute(query, (user_id,))
+    result = cursor.fetchall()
+    cursor.close()
+    conn.close()
+
+def validate_audio_file(file_path):
+    info = mediainfo(file_path)
+    return 'duration' in info and float(info['duration']) > 0
+
 def analyze_song(song_path: str):
-    # print('Analyzing Song...')
-    with audioread.audio_open(song_path) as audio:
-        sr = audio.samplerate
-        samples = np.frombuffer(b"".join(audio), dtype=np.int16).astype(np.float32)
+    try:
+        with audioread.audio_open(song_path) as audio:
+            sr = audio.samplerate
+            samples = np.frombuffer(b"".join(audio), dtype=np.int16).astype(np.float32)
 
-    # Normalize audio
-    samples /= np.max(np.abs(samples))
+        # Normalize audio
+        samples /= np.max(np.abs(samples))
 
-    # MFCC (13 coefficients) – Captures the audio's timbral texture.
-    mfcc = lr.feature.mfcc(y=samples, sr=sr, n_mfcc=13)
-    mfcc_mean = np.mean(mfcc, axis=1)
+        # MFCC (13 coefficients) – Captures the audio's timbral texture.
+        mfcc = lr.feature.mfcc(y=samples, sr=sr, n_mfcc=13)
+        mfcc_mean = np.mean(mfcc, axis=1)
 
-    # Chroma (12 bins) – Captures harmonic content and tonality.
-    chroma = lr.feature.chroma_stft(y=samples, sr=sr)
-    chroma_mean = np.mean(chroma, axis=1)
+        # Chroma (12 bins) – Captures harmonic content and tonality.
+        chroma = lr.feature.chroma_stft(y=samples, sr=sr)
+        chroma_mean = np.mean(chroma, axis=1)
 
-    # Spectral Centroid – Helps distinguish brightness of sounds.
-    spectral_centroid = lr.feature.spectral_centroid(y=samples, sr=sr)
-    spectral_centroid_mean = np.mean(spectral_centroid)
+        # Spectral Centroid – Helps distinguish brightness of sounds.
+        spectral_centroid = lr.feature.spectral_centroid(y=samples, sr=sr)
+        spectral_centroid_mean = np.mean(spectral_centroid)
 
-    # Spectral Bandwidth – Provides insight into the texture of the sound.
-    spectral_bandwidth = lr.feature.spectral_bandwidth(y=samples, sr=sr)
-    spectral_bandwidth_mean = np.mean(spectral_bandwidth)
+        # Spectral Bandwidth – Provides insight into the texture of the sound.
+        spectral_bandwidth = lr.feature.spectral_bandwidth(y=samples, sr=sr)
+        spectral_bandwidth_mean = np.mean(spectral_bandwidth)
 
-    # RMS Energy – Represents the loudness of the song, helping with dynamics.
-    rms = lr.feature.rms(y=samples)
-    rms_mean = np.mean(rms)
+        # RMS Energy – Represents the loudness of the song, helping with dynamics.
+        rms = lr.feature.rms(y=samples)
+        rms_mean = np.mean(rms)
 
-    # Tempo (BPM) – Key for understanding the song's rhythm and pace.
-    onset_env = lr.onset.onset_strength(y=samples, sr=sr)
-    tempo, _ = lr.beat.beat_track(onset_envelope=onset_env, sr=sr)
-     
-    # Zero-Crossing Rate – Useful for distinguishing between percussive and tonal elements.
-    zero_crossing_rate = lr.feature.zero_crossing_rate(y=samples)
-    zero_crossing_rate_mean = np.mean(zero_crossing_rate)
+        # Tempo (BPM) – Key for understanding the song's rhythm and pace.
+        onset_env = lr.onset.onset_strength(y=samples, sr=sr)
+        tempo, _ = lr.beat.beat_track(onset_envelope=onset_env, sr=sr)
+        
+        # Zero-Crossing Rate – Useful for distinguishing between percussive and tonal elements.
+        zero_crossing_rate = lr.feature.zero_crossing_rate(y=samples)
+        zero_crossing_rate_mean = np.mean(zero_crossing_rate)
 
-    song_id = os.path.splitext(os.path.basename(song_path))[0]
+        song_id = os.path.splitext(os.path.basename(song_path))[0]
 
-    features = np.concatenate([
-        [song_id],
-        mfcc_mean,
-        chroma_mean,
-        [spectral_centroid_mean],
-        [spectral_bandwidth_mean],
-        [rms_mean],
-        tempo,
-        [zero_crossing_rate_mean],
-        [np.nan]
-    ])
+        features = np.concatenate([
+            [song_id],
+            mfcc_mean,
+            chroma_mean,
+            [spectral_centroid_mean],
+            [spectral_bandwidth_mean],
+            [rms_mean],
+            tempo,
+            [zero_crossing_rate_mean]
+        ])
 
-    # print(features)
+        return features
 
-    return features
+    except Exception as e:
+        print(f"Unexpected error while analyzing {song_path}: {e}")
+        return None
 
-def analyze_songs(file_paths: list, max_workers=None, prompt=False):
+def analyze_songs(songs: pd.DataFrame, max_workers=None, prompt=False, batch_size=20):
     print('-----------------Analyzing Songs-----------------')
 
-    columns = ['song_id', 'mfcc_1', 'mfcc_2', 'mfcc_3', 'mfcc_4', 'mfcc_5', 
-               'mfcc_6', 'mfcc_7', 'mfcc_8', 'mfcc_9', 'mfcc_10', 'mfcc_11', 
-               'mfcc_12', 'mfcc_13', 
-               'chroma_1', 'chroma_2', 'chroma_3', 'chroma_4', 'chroma_5', 'chroma_6', 
-               'chroma_7', 'chroma_8', 'chroma_9', 'chroma_10', 'chroma_11', 'chroma_12',
-               'spectral_centroid', 
-               'spectral_bandwidth', 
-               'rms', 
-               'tempo',
-               'sero_crossing_rate',
-               'cluster_id']
+    columns = [
+        'song_id', 'mfcc_1', 'mfcc_2', 'mfcc_3', 'mfcc_4', 'mfcc_5', 
+        'mfcc_6', 'mfcc_7', 'mfcc_8', 'mfcc_9', 'mfcc_10', 'mfcc_11', 
+        'mfcc_12', 'mfcc_13', 
+        'chroma_1', 'chroma_2', 'chroma_3', 'chroma_4', 'chroma_5', 'chroma_6', 
+        'chroma_7', 'chroma_8', 'chroma_9', 'chroma_10', 'chroma_11', 'chroma_12',
+        'spectral_centroid', 
+        'spectral_bandwidth', 
+        'rms', 
+        'tempo',
+        'zero_crossing_rate'
+    ]
+    
+
+    batches = [songs['song_id'].to_list()[i:i+batch_size] for i in range(0, len(songs['song_id'].to_list()), batch_size)]
+
+    print(f'{len(batches)} Batches')
 
     features = []
 
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        results = executor.map(analyze_song, file_paths)
+        for i, batch in enumerate(batches):
+            print(f'\nProcessing batch... {i + 1}')
+            preview_urls = []
+            song_ids = []
+            for song_id in batch:
+                try:
+                    url = songs.loc[songs['song_id'] == song_id, 'preview_url'].dropna().values[0]
+                    preview_urls.append(url)
+                    song_ids.append(song_id)
+                except IndexError:
+                    print(f"Skipping {song_id} due to missing preview_url")
 
-    for song_features in results:
-        print(f"song_id: {song_features[0]}, Features: {song_features[1:]}")
-        features.append(song_features)
+            if not preview_urls:
+                continue
+            
+            downloads = list(executor.map(download_audio, song_ids, preview_urls, [os.path.join(CURR_DIR, 'temp_downloads')] * len(song_ids)))
+            downloads = [download for download in downloads if download is not None and validate_audio_file(download)]
+            batch_results = list(executor.map(analyze_song, downloads))
+
+            for path in downloads:
+                os.remove(path)
+
+            # print(f'Batch len: {len(batch_results)}\nBatch Results: {batch_results}')
+                
+            count = 0
+            for song_features in batch_results:
+                # print(f"song_id: {song_features[0]}, Features: {song_features[1:]}")
+                if song_features is not None:
+                    count += 1
+                    features.append(song_features)
+            print(f'Features extracted for {count} song(s)')
 
     # print(f"Features list: {features}")
     song_features_df = pd.DataFrame(data=features, columns=columns)
@@ -803,7 +888,18 @@ def analyze_songs(file_paths: list, max_workers=None, prompt=False):
     else:
         add_df_to_db({'song_features': song_features_df})
 
-    return features
+def sec_to_min(seconds):
+    if seconds < 60:
+        return f'{seconds} seconds'
+    elif seconds < 3600:
+        return f'{int(seconds/60)} minute{'s' if seconds/60 > 1 else ''} {seconds%60} seconds'
+    else:
+        ret = f'{int(seconds/60/60)} hour{'s' if seconds/60 > 1 else ''} '
+        seconds /= 60
+        ret += f'{int(seconds/60)} minute{'s' if seconds/60 > 1 else ''} {seconds%60} seconds'
+        return ret
+    
+
 
 if __name__=='__main__':
     TOP_REC = False
@@ -816,13 +912,16 @@ if __name__=='__main__':
     SAVED = False
     PLAYLIST = False
     FOLLOWS = False
-    SAVE_DATA = True
+    SAVE_DATA = False
     SAVE_PREVIEWS = False
     LOAD_DATA = False
     ARTIST_NAMES = False
     DOWNLOAD_SONGS = False
     SONG_FEATURES = False
     FEATURIZE_TOP_SONGS = False
+    FEATURIZE_DATA_SET = False
+    FEATURIZE_MISSING_SONGS = False
+    LOAD_FEATURES = True
     
 
     test_token = os.getenv('USER_TEST_TOKEN')
@@ -1003,9 +1102,20 @@ if __name__=='__main__':
             print(f'{key}: {len(df)} rows\n{df.head(3)}\n')
     if SAVE_DATA:
 
+        start_time = time.time()
+
+        print(f'Token: {test_token}')
+
         result = get_init_tables(test_token)
 
-        print(result['users'])
+        end_time = time.time()
+        print(f'Total time: {end_time - start_time} seconds')
+
+        for key in result:
+            df = result[key]
+            print(f'\n{key}:')
+            print(f'{len(df)} entries')
+            print(df.head(3), '\n')
 
         while True:
             save = input('Save to database? [y/n]')
@@ -1061,22 +1171,69 @@ if __name__=='__main__':
     if FEATURIZE_TOP_SONGS:
         start_time = time.time()
         result = load_tables()
-        users, songs, user_song_interactions = result['users'], result['songs'], result['user_song_interactions']
-        user_id = users['user_id'].iloc[0]
 
         result['songs'] = result['songs'].iloc[:10].copy()
 
-        folder_path = os.path.join(CURR_DIR, 'temp_downloads')
-
-        result = get_previews(result, folder_path)
+        analyze_songs(result['songs'], prompt=True)
 
         end_time = time.time()
         print(f'\nElapsed time: {end_time - start_time} seconds\n')
 
-        analyze_songs(os.path.join(folder_path, file_name) for file_name in os.listdir(os.path.join(CURR_DIR, 'temp_downloads')))
+    if FEATURIZE_DATA_SET:
+        start_time = time.time()
+        result = load_tables()
+
+        analyze_songs(result['songs'])
 
         end_time = time.time()
         print(f'\nElapsed time: {end_time - start_time} seconds\n')
 
-        for file_name in os.listdir(folder_path):
-            os.remove(os.path.join(folder_path, file_name))
+    if FEATURIZE_MISSING_SONGS:
+        start_time = time.time()
+
+        # query = '''
+        #     WITH missing_songs AS (
+        #         SELECT s.* FROM songs s
+        #         LEFT JOIN song_features sf ON s.song_id = sf.song_id
+        #         WHERE sf.song_id IS NULL
+        #     )
+        #     SELECT 
+        #         ms.*,
+        #         sai.artist_id,
+        #         a.name
+        #     FROM missing_songs ms
+        #     LEFT JOIN song_artist_interactions sai ON ms.song_id = sai.song_id
+        #     LEFT JOIN artists a ON sai.artist_id = a.artist_id;
+        # '''
+
+        # df = pd.read_sql(query, engine)
+
+        # tables = {}
+        # tables['songs'] = df.drop(columns=['artist_id', 'name'])
+        # tables['song_artist_interactions'] = df[['song_id', 'artist_id']]
+        # tables['artists'] = df[['artist_id', 'name']]
+
+        query = '''
+            SELECT s.* FROM songs s
+            LEFT JOIN song_features sf ON s.song_id = sf.song_id
+            WHERE sf.song_id IS NULL
+        '''
+
+        engine = get_engine()
+
+        songs = pd.read_sql(query, engine)
+
+        print(f'Rows: {len(songs)}\n{songs['title']}')
+        analyze_songs(songs)
+
+        end_time = time.time()
+        print(f'Completed in {sec_to_min(end_time-start_time)}')
+
+    if LOAD_FEATURES:
+        query = '''
+            SELECT * FROM song_features
+        '''
+        connection_string = f'mysql+pymysql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}'
+        engine = create_engine(connection_string)
+        song_features = pd.read_sql(query, engine)
+        print(song_features)
