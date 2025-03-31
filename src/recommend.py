@@ -9,13 +9,14 @@ import random
 
 def check_token(user_id):
     try:
-        query = '''
+        query = text('''
             SELECT * FROM users
-            WHERE user_id = %s
-        '''
+            WHERE user_id = :user_id;
+        ''')
 
         engine = utils.get_engine()
-        user_data = pd.read_sql(query, engine, params=(user_id,))
+        with engine.connect() as conn:
+            user_data = pd.read_sql(query, conn, params={'user_id': user_id})
         if len(user_data) == 0:
             return (False, user_id)
         else:
