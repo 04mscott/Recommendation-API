@@ -57,13 +57,14 @@ def recommend_songs(user_id, top_n=20, noise_factor=0.1):
         recommended_songs.iloc[noisy_index, recommended_songs.columns.get_loc('song_id')] = noisy_song_ids[i]
 
     song_ids = recommended_songs['song_id'].to_list()
-    query = f"""
+    query = text("""
         SELECT * FROM songs
-        WHERE song_id IN ({','.join(f"'{song_id}'" for song_id in song_ids)});
-    """
+        WHERE song_id IN :song_ids;
+    """)
     
     engine = utils.get_engine()
-    songs = pd.read_sql(query, engine)
+    with engine.connect() as conn:
+        songs = pd.read_sql(query, conn, params={'song_ids': ','.join(f"'{song_id}'" for song_id in song_ids)})
 
     return songs.to_dict(orient='records')
 
