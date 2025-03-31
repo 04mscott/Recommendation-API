@@ -733,28 +733,21 @@ def load_tables(tables=['users', 'songs', 'artists', 'artist_genres', 'user_song
     return result
 
 def load_user_tables(user_id: str):
-    query = '''
+    query = text('''
         SELECT 
             s.*,
             a.*
-        FROM
-            user_song_interactions usi
-        JOIN 
-            songs s ON usi.song_id = s.song_id
-        JOIN 
-            song_artist_interactions sai ON s.song_id = sai.song_id
-        JOIN 
-            artists a ON sai.artist_id = a.artist_id
-        WHERE 
-            usi.user_id = %s;
-    '''
+        FROM user_song_interactions usi
+        JOIN songs s ON usi.song_id = s.song_id
+        JOIN song_artist_interactions sai ON s.song_id = sai.song_id
+        JOIN artists a ON sai.artist_id = a.artist_id
+        WHERE usi.user_id = :user_id;
+    ''')
 
-    conn = connect_to_db()
-    cursor = conn.cursor()
-    cursor.execute(query, (user_id,))
-    result = cursor.fetchall()
-    cursor.close()
-    conn.close()
+    engine = get_engine()
+    with engine.connect() as conn:
+        user = pd.read_sql(query, conn, params={'user_id': user_id})
+    return user
 
 def validate_audio_file(file_path):
     info = mediainfo(file_path)
@@ -1190,28 +1183,6 @@ if __name__=='__main__':
 
     if FEATURIZE_MISSING_SONGS:
         start_time = time.time()
-
-        # query = '''
-        #     WITH missing_songs AS (
-        #         SELECT s.* FROM songs s
-        #         LEFT JOIN song_features sf ON s.song_id = sf.song_id
-        #         WHERE sf.song_id IS NULL
-        #     )
-        #     SELECT 
-        #         ms.*,
-        #         sai.artist_id,
-        #         a.name
-        #     FROM missing_songs ms
-        #     LEFT JOIN song_artist_interactions sai ON ms.song_id = sai.song_id
-        #     LEFT JOIN artists a ON sai.artist_id = a.artist_id;
-        # '''
-
-        # df = pd.read_sql(query, engine)
-
-        # tables = {}
-        # tables['songs'] = df.drop(columns=['artist_id', 'name'])
-        # tables['song_artist_interactions'] = df[['song_id', 'artist_id']]
-        # tables['artists'] = df[['artist_id', 'name']]
 
         query = '''
             SELECT s.* FROM songs s
