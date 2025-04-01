@@ -1,12 +1,9 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel
-import recommend, utils
-import requests
-import asyncio
-import threading
+import recommend
+
 
 app = FastAPI()
-
 class User(BaseModel):
     user_id: str
 class Song(BaseModel):
