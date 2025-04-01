@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 import random
 
 
-def check_token(user_id):
+def check_user(user_id: str):
     try:
         query = text('''
             SELECT * FROM users
@@ -17,22 +17,23 @@ def check_token(user_id):
         engine = utils.get_engine()
         with engine.connect() as conn:
             user_data = pd.read_sql(query, conn, params={'user_id': user_id})
-        if len(user_data) == 0:
-            return (False, user_id)
-        else:
-            return (True, user_id)
+        return len(user_data) > 0
     except Exception as e:
-        print(f'Error checking token: {e}')
-        return False, None
+        print(f'Error checking user_id: {e}')
+        return False
 
-def recommend_songs(user_id, top_n=20, noise_factor=0.1):
+def recommend_songs(user_id: str, top_n: int = 20, noise_factor: int = 0.1):
 
-    query = '''
-        SELECT * FROM song_features;
-    '''
+    song_ids = utils.get_all_user_songs(user_id)
+
+    query = text('''
+        SELECT * FROM song_features
+        WHERE song_id NOT IN :song_ids;
+    ''')
 
     engine = utils.get_engine()
-    song_features = pd.read_sql(query, engine)
+    with engine.connect() as conn:
+        song_features = pd.read_sql(query, conn, params={'song_ids': tuple(song_ids)})
 
     user_profile_vector = get_mean_vector(user_id)
 
@@ -56,19 +57,30 @@ def recommend_songs(user_id, top_n=20, noise_factor=0.1):
     for i, noisy_index in enumerate(noisy_song_indices):
         recommended_songs.iloc[noisy_index, recommended_songs.columns.get_loc('song_id')] = noisy_song_ids[i]
 
+
     song_ids = recommended_songs['song_id'].to_list()
+
     query = text("""
-        SELECT * FROM songs
-        WHERE song_id IN :song_ids;
+        SELECT 
+            s.song_id,
+            s.title,
+            GROUP_CONCAT(a.name ORDER BY a.name SEPARATOR ', ') AS artists,
+            s.img_url,
+            s.preview_url
+        FROM songs s
+        LEFT JOIN song_artist_interactions sai ON s.song_id = sai.song_id
+        LEFT JOIN artists a ON sai.artist_id = a.artist_id
+        WHERE s.song_id IN :song_ids
+        GROUP BY s.song_id, s.title, s.img_url, s.preview_url;
     """)
     
     engine = utils.get_engine()
     with engine.connect() as conn:
-        songs = pd.read_sql(query, conn, params={'song_ids': ','.join(f"'{song_id}'" for song_id in song_ids)})
+        songs = pd.read_sql(query, conn, params={'song_ids': tuple(song_ids)})
 
     return songs.to_dict(orient='records')
 
-def get_top_weights(song_ids: list, alpha=0.05):
+def get_top_weights(song_ids: list, alpha: int = 0.05):
     if len(song_ids) == 0:
         return {}
     
@@ -79,7 +91,7 @@ def get_top_weights(song_ids: list, alpha=0.05):
 
     return dict(zip(song_ids, weights)) # Dict using song_id as key and weight as value
 
-def get_rec_weights(song_ids: list, t_liked: pd.Series, alpha=0.002):
+def get_rec_weights(song_ids: list, t_liked: pd.Series, alpha: int = 0.002):
     if len(t_liked) == 0:
         return {}
     
@@ -94,7 +106,7 @@ def get_rec_weights(song_ids: list, t_liked: pd.Series, alpha=0.002):
 
     return dict(zip(song_ids, weights)) # Dict using song_id as key and weight as value
 
-def get_saved_weights(song_ids: list, top_weights: dict, base_weight=0.1, boost_factor=0.5):
+def get_saved_weights(song_ids: list, top_weights: dict, base_weight: int = 0.1, boost_factor: int = 0.5):
     weights = [
         base_weight + top_weights.get(song_id, 0) * boost_factor
         for song_id in song_ids
@@ -138,15 +150,16 @@ def get_weighted_mean_vector(features_dict: dict):
         means[key] = weighted_sum / total_weight
         
     total_weight = sum(default_weights.values())
+
     if total_weight > 0:
         default_weights = {key: weight / total_weight for key, weight in default_weights.items()}
        
-    weighted_sum = sum(means[key] * default_weights[key] for key in means)
+    weighted_mean = sum(means[key] * default_weights[key] for key in means)
 
-    if np.all(weighted_sum == 0) or total_weight == 0:
+    if np.all(weighted_mean == 0) or total_weight == 0:
         return get_global_avg_vector()
 
-    return weighted_sum / total_weight
+    return weighted_mean
 
 def get_global_avg_vector():
     query = '''
@@ -208,7 +221,7 @@ def get_mean_vector(user_id: str):
 def get_new_user():
     pass
 
-def get_top_songs(user_id: str, top_n=10):
+def get_top_songs(user_id: str, top_n: int = 10):
 
     engine = utils.get_engine()
 
@@ -226,6 +239,7 @@ def get_top_songs(user_id: str, top_n=10):
     return top_songs.head(top_n)
 
 if __name__=='__main__':
+    GET_USER = True
     TOP_SONGS = False
     TOP_WEIGHTS = False
     REC_WEIGHTS = False
@@ -237,6 +251,14 @@ if __name__=='__main__':
 
     # test_token = os.getenv('USER_TEST_TOKEN')
 
+    if GET_USER:
+        engine = utils.get_engine()
+        query = '''
+            SELECT * FROM users
+        '''
+        users = pd.read_sql(query, engine)
+        print(users[['user_id', 'email']])
+    
     if TOP_SONGS:
         engine = utils.get_engine()
         query = '''

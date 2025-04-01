@@ -3,7 +3,6 @@ from sqlalchemy import create_engine, text
 from pydub.utils import mediainfo
 from dotenv import load_dotenv
 from requests import get
-import mysql.connector
 import librosa as lr
 import pandas as pd
 import numpy as np
@@ -27,7 +26,7 @@ youtube_key = os.getenv('YOUTUBE_KEY')
 
 CURR_DIR = current_directory_os = os.getcwd()
 
-def safe_api_call(url: str, headers: dict, params=None, max_retries=3):
+def safe_api_call(url: str, headers: dict, params: dict = None, max_retries: int = 3):
     retries = 0
     while retries < max_retries:
         response = get(url, headers=headers, params=params)
@@ -44,18 +43,20 @@ def safe_api_call(url: str, headers: dict, params=None, max_retries=3):
             print(f"Error {response.status_code}: {response.text}")
             return None
 
+def get_all_user_songs(user_id: str):
+    query = text('''
+        SELECT song_id FROM user_song_interactions
+        WHERE user_id = :user_id;
+    ''')
+    engine = get_engine()
+    with engine.connect() as conn:
+        songs = pd.read_sql(query, conn, params={'user_id': user_id})
+
+    return songs['song_id'].to_list()
+
 def get_auth_header(token: str):
     return {'Authorization': 'Bearer ' + token}
-    
-def connect_to_db():
-    conn = mysql.connector.connect(
-        host=db_host,
-        user=db_user,
-        password=db_password,
-        database=db_name
-    )
-    return conn
-    
+
 def get_engine():
     connection_string = f'mysql+pymysql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}'
     return create_engine(connection_string)
@@ -86,7 +87,6 @@ def get_init_tables(token: str):
         'users': user,
         'songs': pd.DataFrame(columns=['song_id', 'title', 'img_url', 'preview_url']),
         'artists': pd.DataFrame(columns=['artist_id', 'name']),
-        'artist_genres': pd.DataFrame(columns=['artist_id', 'genre']),
         'user_song_interactions': pd.DataFrame(columns=['user_id', 'song_id', 'saved', 'top_song', 'playlist']),
         'user_artist_interactions': pd.DataFrame(columns=['user_id', 'artist_id', 'follows', 'top_artist']),
         'song_artist_interactions': pd.DataFrame(columns=['song_id', 'artist_id'])
@@ -95,22 +95,32 @@ def get_init_tables(token: str):
     start_time = time.time()
     result = get_top(headers, user_id, result)
     end_time = time.time()
-    print(f'Completed in {end_time - start_time} seconds\n')
+    print(f'Completed in {sec_to_min(end_time - start_time)} seconds\n')
 
     start_time = time.time()
     result = get_all_saved_tracks(headers, user_id, result)
     end_time = time.time()
-    print(f'Completed in {end_time - start_time} seconds\n')
+    print(f'Completed in {sec_to_min(end_time - start_time)} seconds\n')
 
     start_time = time.time()
     result = get_followed_artists(headers, user_id, result)
     end_time = time.time()
-    print(f'Completed in {end_time - start_time} seconds\n')
+    print(f'Completed in {sec_to_min(end_time - start_time)} seconds\n')
 
     start_time = time.time()
     result = get_all_playlist_tracks(headers, user_id, result)
     end_time = time.time()
-    print(f'Completed in {end_time - start_time} seconds\n')
+    print(f'Completed in {sec_to_min(end_time - start_time)} seconds\n')
+
+    query = '''
+        SELECT * FROM songs;
+    '''
+
+    engine = get_engine()
+    saved_songs = pd.read_sql(query, engine)
+    saved_song_ids = saved_songs['song_id'].to_list()
+
+    result['songs'] = result['songs'][~result['songs']['song_id'].isin(saved_song_ids)]
 
     for key in result:
         result[key] = result[key].drop_duplicates()
@@ -118,12 +128,7 @@ def get_init_tables(token: str):
     start_time = time.time()
     result = get_previews(result, download=False)
     end_time = time.time()
-    print(f'Completed in {end_time - start_time} seconds\n')
-        
-    start_time = time.time()
-    result = get_genres(headers, result)
-    end_time = time.time()
-    print(f'Completed in {end_time - start_time} seconds\n')
+    print(f'Completed in {sec_to_min(end_time - start_time)} seconds\n')
 
     return result
 
@@ -142,7 +147,7 @@ def get_user_info(token: str):
         'profile_img_url': [json_response['images'][0]['url'] if json_response['images'] != [] else '']
     })
 
-def get_top(headers: dict, user_id: str, result: dict, limit=50, top_artists=True):
+def get_top(headers: dict, user_id: str, result: dict, limit: int = 50, top_artists: int = True):
     print('-----------------Getting Top Tracks/Artists Data-----------------')
     
     url = 'https://api.spotify.com/v1/me/top/tracks'
@@ -243,7 +248,7 @@ def get_all_saved_tracks(headers: dict, user_id: str, result: dict):
     result['song_artist_interactions'] = pd.concat([result['song_artist_interactions'], pd.DataFrame(data=song_artist_interaction_list, columns=result['song_artist_interactions'].columns)])
     return result
 
-def get_all_playlist_tracks(headers: dict, user_id: str, result: dict, print_results=False):
+def get_all_playlist_tracks(headers: dict, user_id: str, result: dict, print_results: bool = False):
     print('-----------------Getting Playlists-----------------')
 
     url = f'https://api.spotify.com/v1/users/{user_id}/playlists'
@@ -375,32 +380,6 @@ def get_followed_artists(headers: dict, user_id: str, result: dict):
             break
 
     result['user_artist_interactions'] = pd.concat([result['user_artist_interactions'], pd.DataFrame(data=user_artist_interactions_list, columns=result['user_artist_interactions'].columns)])
-    return result
-
-def get_genres(headers: dict, result: dict):
-    print('-----------------Getting Genre Data-----------------')
-
-    url = 'https://api.spotify.com/v1/artists'
-    artists = result['artists']
-    artist_ids = artists['artist_id'].tolist()
-    artist_genres = result['artist_genres']
-    end = 50
-
-    artist_genres_list = []
-    while end < len(artist_ids) or abs(len(artist_ids) - end) < 50:
-        params = {
-            'ids': ','.join(artist_ids[end-50:end])
-        }
-        response = get(url=url, headers=headers, params=params)
-        json_response = json.loads(response.content)
-
-        for artist in json_response['artists']:
-            artist_id = artist['id']
-            if artist.get('genres'):
-                for genre in artist['genres']:
-                    artist_genres_list.append([artist_id, genre])
-        end += 50
-    result['artist_genres'] = pd.concat([result['artist_genres'], pd.DataFrame(data=artist_genres_list, columns=result['artist_genres'].columns)])
     return result
 
 def add_df_to_db(dfs: dict):
@@ -594,7 +573,7 @@ def get_artist_name(song_ids: list, result: dict):
 
     return song_artists
 
-def fetch_urls_for_batch(batch, result):
+def fetch_urls_for_batch(batch: list, result: dict):
     
     names = get_artist_name(batch, result)
 
@@ -623,7 +602,7 @@ def fetch_urls_for_batch(batch, result):
 
     return dict(results)
 
-def download_audio(song_id, url, folder_path):
+def download_audio(song_id: str, url: str, folder_path: str):
     """Downloads the song from the URL to the specified folder path."""
     if not url:
         print(f"Skipping {song_id} due to missing URL")
@@ -651,7 +630,7 @@ def download_audio(song_id, url, folder_path):
     except Exception as e:
         print(f"Error downloading {url}: {e}")
 
-def fetch_all_urls(batches, result):
+def fetch_all_urls(batches: list, result: dict):
     """Fetch URLs for all batches sequentially."""
     
     all_urls = {}
@@ -667,7 +646,7 @@ def fetch_all_urls(batches, result):
     
     return all_urls    
 
-def get_previews(result: dict, folder_path=None, download=True, batch_size=20, max_workers=4):
+def get_previews(result: dict, folder_path: str = None, download: bool = True, batch_size: int = 20, max_workers: int = 4):
     """Process songs in batches to get preview URLs."""
     
     print('-----------------Getting Preview URLs-----------------')
@@ -694,7 +673,7 @@ def get_previews(result: dict, folder_path=None, download=True, batch_size=20, m
 
     return result
 
-def top_tracks_for_recs(headers: dict, user_id, result: dict, num=10):
+def top_tracks_for_recs(headers: dict, user_id: str, result: dict, num: int = 10):
     result = get_top(headers=headers, user_id=user_id, result=result, limit=num, top_artists=False)
     
     folder_path = os.path.join(CURR_DIR, 'temp_downloads')
@@ -749,11 +728,12 @@ def load_user_tables(user_id: str):
         user = pd.read_sql(query, conn, params={'user_id': user_id})
     return user
 
-def validate_audio_file(file_path):
+def validate_audio_file(file_path: str):
     info = mediainfo(file_path)
     return 'duration' in info and float(info['duration']) > 0
 
 def analyze_song(song_path: str):
+    print('Analyzing Song')
     try:
         with audioread.audio_open(song_path) as audio:
             sr = audio.samplerate
@@ -809,7 +789,7 @@ def analyze_song(song_path: str):
         print(f"Unexpected error while analyzing {song_path}: {e}")
         return None
 
-def analyze_songs(songs: pd.DataFrame, max_workers=None, prompt=False, batch_size=20):
+def analyze_songs(songs: pd.DataFrame, max_workers: int = None, prompt: bool = False, batch_size: int = 20):
     print('-----------------Analyzing Songs-----------------')
 
     columns = [
@@ -881,7 +861,21 @@ def analyze_songs(songs: pd.DataFrame, max_workers=None, prompt=False, batch_siz
     else:
         add_df_to_db({'song_features': song_features_df})
 
-def sec_to_min(seconds):
+def analyze_missing_songs():
+    query = '''
+        SELECT s.* FROM songs s
+        LEFT JOIN song_features sf ON s.song_id = sf.song_id
+        WHERE sf.song_id IS NULL
+    '''
+
+    engine = get_engine()
+
+    songs = pd.read_sql(query, engine)
+
+    print(f'Rows: {len(songs)}\n{songs['title']}')
+    analyze_songs(songs)
+
+def sec_to_min(seconds: int):
     if seconds < 60:
         return f'{seconds} seconds'
     elif seconds < 3600:
@@ -891,8 +885,6 @@ def sec_to_min(seconds):
         seconds /= 60
         ret += f'{int(seconds/60)} minute{'s' if seconds/60 > 1 else ''} {seconds%60} seconds'
         return ret
-    
-
 
 if __name__=='__main__':
     TOP_REC = False
@@ -913,8 +905,8 @@ if __name__=='__main__':
     SONG_FEATURES = False
     FEATURIZE_TOP_SONGS = False
     FEATURIZE_DATA_SET = False
-    FEATURIZE_MISSING_SONGS = False
-    LOAD_FEATURES = True
+    FEATURIZE_MISSING_SONGS = True
+    LOAD_FEATURES = False
     
 
     test_token = os.getenv('USER_TEST_TOKEN')
@@ -940,8 +932,6 @@ if __name__=='__main__':
         end_time = time.time()
         print(f'Completed in {end_time - start_time} seconds')
 
-        # print(result['songs']['preview_url'])
-
     if USER:
         start_time = time.time()
         result = get_user_info(test_token)
@@ -949,29 +939,6 @@ if __name__=='__main__':
         print(f'Completed in {end_time - start_time} seconds')
         
         print(result)
-
-    if GENRE:
-        headers = get_auth_header(test_token)
-        result = {
-            'users': get_user_info(test_token),
-            'songs': pd.DataFrame(columns=['song_id', 'title', 'img_url', 'preview_url']),
-            'artists': pd.DataFrame(columns=['artist_id', 'name']),
-            'artist_genres': pd.DataFrame(columns=['artist_id', 'genre']),
-            'user_song_interactions': pd.DataFrame(columns=['user_id', 'song_id', 'saved', 'top_song', 'playlist']),
-            'user_artist_interactions': pd.DataFrame(columns=['user_id', 'artist_id', 'follows', 'top_artist']),
-            'song_artist_interactions': pd.DataFrame(columns=['song_id', 'artist_id'])
-        }
-        user_id = result['users']['user_id'].iloc[0]
-
-        result = get_top(headers, user_id, result)
-        for key in result:
-            result[key] = result[key].drop_duplicates()
-        start_time = time.time()
-        result = get_genres(headers, user_id, result)
-        end_time = time.time()
-        print(f'Completed in {end_time - start_time} seconds')
-
-        print(f'Artist Genres:\n{len(result['artist_genres'])} rows\n{result['artist_genres']['artist_id'].nunique()} unique artist ID\'s\n{result['artist_genres'].head(3)}')
 
     if TABLES:
         start_time = time.time()
@@ -982,12 +949,6 @@ if __name__=='__main__':
         for key in result:
             print(f'{key}: {len(result[key])} rows')
             print(result[key].head(3))
-
-    if CONNECT:
-        print('Connecting to database...')
-        cursor = connect_to_db()
-        if cursor:
-            print('Connected to database successfully')
 
     if YOUTUBE:
         start_time = time.time()
@@ -1184,18 +1145,7 @@ if __name__=='__main__':
     if FEATURIZE_MISSING_SONGS:
         start_time = time.time()
 
-        query = '''
-            SELECT s.* FROM songs s
-            LEFT JOIN song_features sf ON s.song_id = sf.song_id
-            WHERE sf.song_id IS NULL
-        '''
-
-        engine = get_engine()
-
-        songs = pd.read_sql(query, engine)
-
-        print(f'Rows: {len(songs)}\n{songs['title']}')
-        analyze_songs(songs)
+        analyze_missing_songs()
 
         end_time = time.time()
         print(f'Completed in {sec_to_min(end_time-start_time)}')
