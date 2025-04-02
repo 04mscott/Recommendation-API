@@ -1,5 +1,4 @@
 from fastapi import FastAPI, HTTPException, Header
-# import celery_worker
 from celery.result import AsyncResult
 from pydantic import BaseModel
 from dotenv import load_dotenv
