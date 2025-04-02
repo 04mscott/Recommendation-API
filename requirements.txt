@@ -2,7 +2,6 @@ numpy
 dotenv
 requests
 pandas
-mysql.connector
 sqlalchemy
 pymysql
 pytubefix
@@ -14,3 +13,6 @@ fastapi
 pydantic
 audioread
 scikit-learn
+uvicorn
+celery
+redis
