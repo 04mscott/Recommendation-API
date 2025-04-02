@@ -73,9 +73,6 @@ def save_user_data(
         logging.error(f"Error saving data for user {user_id}: {e}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail='An unexpected error occurred while saving user data.')
 
-
-
-
 @app.get("/status/{task_id}")
 def get_task_status(task_id: str):
     task = AsyncResult(task_id, app=celery)

@@ -407,7 +407,7 @@ if __name__=='__main__':
             SELECT * FROM users
         '''
         users = pd.read_sql(query, engine)
-        user_id = users.loc[users['email'] == 'mscott22@terpmail.umd.edu', 'user_id'].values[0]
+        user_id = users.loc[users['email'] == 'masonscott141@gmail.com', 'user_id'].values[0]
                 
         recs = recommend_songs(user_id, top_n=20)
         for rec in recs:

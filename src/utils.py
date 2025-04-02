@@ -13,6 +13,7 @@ import numpy as np
 import subprocess
 import audioread
 import logging
+import random
 import yt_dlp
 import json
 import time
@@ -433,9 +434,10 @@ def add_df_to_db(dfs: dict[str, DataFrame]) -> None:
     if 'song_features' in dfs and len(dfs['song_features']) > 0:
         song_features = dfs['song_features']
         song_features_data = song_features.to_dict(orient='records')
+        # print(songs_data)
 
         columns = ', '.join(song_features.columns)
-        update_values = ', '.join([f'{col}=VALUES({col})' for col in song_features.columns if col != 'song_id'])
+        update_values = ', '.join([f'{col}=VALUES({col})' for col in song_features.columns])
 
         query = f'''
             INSERT INTO song_features ({columns})
@@ -447,7 +449,7 @@ def add_df_to_db(dfs: dict[str, DataFrame]) -> None:
             conn.execute(text(query), song_features_data)
             conn.commit()
 
-        print(f'SONG FEATURES data inserted successfully')
+        print(f'SONG FEATURE data inserted successfully')
 
     if 'artists' in dfs and len(dfs['artists']) > 0:
         artists = dfs['artists']
@@ -604,41 +606,41 @@ def fetch_urls_for_batch(batch: list[str], result: dict[str, DataFrame]) -> dict
 
     return dict(results)
 
-def download_audios(song_ids: list[str], urls: list[str], folder_path: str) -> list[str]:
+def download_audio(song_id: str, url: str, folder_path: str) -> list[str]:
 
-    if len(urls) == 0:
-        print(f"Skipping batch due to missing URLs")
-        return None
-    if len(song_ids) != len(urls):
-        print('Input size mismatch')
+    if not url:
+        print(f"Skipping {song_id} due to missing url")
         return None
 
     os.makedirs(folder_path, exist_ok=True)  # Ensure directory exists
 
-    downloaded_files = []
-    for song_id, url in zip(song_ids, urls):
-        output_template = os.path.join(folder_path, f"{song_id}.%(ext)s")
+    output_template = os.path.join(folder_path, f"{song_id}.%(ext)s")
 
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'outtmpl': output_template,
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'wav',
-                'preferredquality': '192',
-            }],
-            'quiet': True,
-        }
+    cookies_path = os.path.join(os.path.dirname(CURR_DIR), 'cookies.txt')
 
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([url])
-            downloaded_files.append(os.path.join(folder_path, f"{song_id}.wav"))
-            print(f"Downloaded: {song_id}")
-        except Exception as e:
-            print(f"Error downloading {song_id} ({url}): {e}")
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'outtmpl': output_template,
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'wav',
+            'preferredquality': '192',
+        }],
+        'quiet': True,
+        'cookies': cookies_path,
+    }
 
-    return downloaded_files
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+        downloaded_file = os.path.join(folder_path, f"{song_id}.wav")
+        print(f"Downloaded: {song_id}")
+
+        time.sleep(random.uniform(2, 5))
+
+        return downloaded_file
+    except Exception as e:
+        print(f"Error downloading {song_id} ({url}): {e}")
 
 def fetch_all_urls(batches: list[list[str]], result: dict[str, DataFrame]) -> dict[str, str]:
     """Fetch URLs for all batches sequentially."""
@@ -750,8 +752,13 @@ def validate_audio_file(file_path: str) -> bool:
     info = mediainfo(file_path)
     return 'duration' in info and float(info['duration']) > 0
 
-def analyze_song(song_path: str) -> NDArray[any]:
-    print('Analyzing Song')
+def analyze_song(song_path: str, limit: int = 15*60) -> NDArray[any] | None:
+    info = mediainfo(song_path)
+    duration = float(info['duration'])
+    song_id = os.path.splitext(os.path.basename(song_path))[0]
+    if duration > limit:
+        print(f'Skipping {song_id} due to long length')
+        return None
     try:
         with audioread.audio_open(song_path) as audio:
             sr = audio.samplerate
@@ -788,8 +795,6 @@ def analyze_song(song_path: str) -> NDArray[any]:
         zero_crossing_rate = lr.feature.zero_crossing_rate(y=samples)
         zero_crossing_rate_mean = np.mean(zero_crossing_rate)
 
-        song_id = os.path.splitext(os.path.basename(song_path))[0]
-
         features = np.concatenate([
             [song_id],
             mfcc_mean,
@@ -807,9 +812,9 @@ def analyze_song(song_path: str) -> NDArray[any]:
         print(f"Unexpected error while analyzing {song_path}: {e}")
         return None
 
-def analyze_songs(songs: DataFrame, prompt: bool = False, batch_size: int = 20, max_workers: int = 4) -> None:
+def analyze_songs(songs: DataFrame, prompt: bool = False, batch_size: int = 20, max_workers: int = 2) -> None:
 
-    if len(songs) == 0 or batch_size == 0 or max_workers == 0:
+    if len(songs) == 0 or batch_size == 0:
         return None
 
     print('-----------------Analyzing Songs-----------------')
@@ -849,10 +854,10 @@ def analyze_songs(songs: DataFrame, prompt: bool = False, batch_size: int = 20, 
         if not preview_urls:
             continue
         
-        downloads = download_audios(song_ids, preview_urls, os.path.join(CURR_DIR, 'temp_downloads'))
-        downloads = [download for download in downloads if download is not None and validate_audio_file(download)]
-         
+        folder_path = os.path.join(CURR_DIR, 'temp_downloads')
         with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            downloads = list(executor.map(download_audio, song_ids, preview_urls, [folder_path] * len(song_ids)))
+            downloads = [download for download in downloads if download is not None and validate_audio_file(download)]
             batch_results = list(executor.map(analyze_song, downloads))
 
         for path in downloads:
@@ -867,7 +872,10 @@ def analyze_songs(songs: DataFrame, prompt: bool = False, batch_size: int = 20, 
         print(f'Features extracted for {count} song(s)')
 
     # print(f"Features list: {features}")
-    song_features_df = DataFrame(data=features, columns=columns)
+    song_features_df = DataFrame(data=features, columns=columns).dropna()
+    song_features_df['song_id'] = song_features_df['song_id'].apply(str)
+    numeric_columns = columns[1:]
+    song_features_df[numeric_columns] = song_features_df[numeric_columns].apply(pd.to_numeric)
 
     if prompt:
         while True:
@@ -882,13 +890,12 @@ def analyze_songs(songs: DataFrame, prompt: bool = False, batch_size: int = 20, 
     else:
         add_df_to_db({'song_features': song_features_df})
 
-def analyze_missing_songs(user_id: str) -> None:
+def analyze_missing_songs(user_id: str, limit: int = 100) -> None:
 
-    previous_count = None
+    # previous_count = None
 
     print('Retrieving missing songs...')
-    while(True):
-        query = text('''
+    query = text(f'''
             WITH user_songs as(
                 SELECT s.* FROM songs
                 INNER JOIN user_song_interactions usi ON s.song_id = usi.song_id
@@ -896,23 +903,22 @@ def analyze_missing_songs(user_id: str) -> None:
             )
             SELECT s.* FROM songs s
             LEFT JOIN song_features sf ON s.song_id = sf.song_id
-            WHERE sf.song_id IS NULL
-            LIMIT 100;
+            WHERE sf.song_id IS NULL;
         ''')
 
-        engine = get_engine()
-        with engine.connect() as conn:
-            missing_songs = pd.read_sql(query, conn, params={'user_id': user_id})
+    engine = get_engine()
+    with engine.connect() as conn:
+        missing_songs = pd.read_sql(query, conn, params={'user_id': user_id})
 
-        current_count = len(missing_songs)
+    # current_count = len(missing_songs)
 
-        if current_count == 0 or current_count == previous_count and current_count < 100:
-            # Stop if no songs left or progress has stalled
-            break
+    # if current_count == 0 or current_count == previous_count and current_count < limit:
+    #     # Stop if no songs left or progress has stalled
+    #     break
 
-        analyze_songs(missing_songs, batch_size=10)
+    analyze_songs(missing_songs, batch_size=20)
 
-        previous_count = current_count
+    # previous_count = current_count
 
 def sec_to_min(seconds: int) -> str:
     if seconds < 60:
@@ -1185,7 +1191,7 @@ if __name__=='__main__':
         start_time = time.time()
 
         test_id = os.getenv('TEST_ID_2')
-        analyze_missing_songs(test_id)
+        analyze_missing_songs(test_id, limit=100)
 
         end_time = time.time()
         print(f'Completed in {sec_to_min(end_time-start_time)}')
@@ -1194,7 +1200,8 @@ if __name__=='__main__':
         query = '''
             SELECT * FROM song_features
         '''
-        connection_string = f'mysql+pymysql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}'
-        engine = create_engine(connection_string)
+        engine = get_engine()
         song_features = pd.read_sql(query, engine)
         print(song_features)
+        print(len(song_features))
+        print(song_features['song_id'].unique)
