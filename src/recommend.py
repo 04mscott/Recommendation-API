@@ -1,44 +1,68 @@
 import utils
 from sklearn.metrics.pairwise import cosine_similarity
 import pandas as pd
+from pandas import DataFrame, Series
 from sqlalchemy import text
+from numpy.typing import NDArray
+from fastapi import HTTPException
 import numpy as np
+import time
 from dotenv import load_dotenv
 import random
 
 
-def check_user(user_id: str):
+def check_user_time(user_id: str, time: bool = True) -> bool:
     try:
         query = text('''
-            SELECT * FROM users
+            SELECT user_id, last_updated FROM users
             WHERE user_id = :user_id;
         ''')
 
         engine = utils.get_engine()
         with engine.connect() as conn:
             user_data = pd.read_sql(query, conn, params={'user_id': user_id})
-        return len(user_data) > 0
+
+        if len(user_data) == 0:
+            return False
+
+        last_updated = user_data['last_updated'].values[0]
+        return time and (pd.Timestamp.now() - last_updated).total_seconds() / 3600 < 24
+
     except Exception as e:
         print(f'Error checking user_id: {e}')
         return False
 
-def recommend_songs(user_id: str, top_n: int = 20, noise_factor: int = 0.1):
+def recommend_songs(user_id: str | None = None, top_n: int = 20, noise_factor: int = 0.1) -> list[dict[str, any]]:
 
-    song_ids = utils.get_all_user_songs(user_id)
+    if user_id:
+        song_ids = utils.get_all_user_songs(user_id)
 
-    query = text('''
-        SELECT * FROM song_features
-        WHERE song_id NOT IN :song_ids;
-    ''')
+        query = text('''
+            SELECT * FROM song_features
+            WHERE song_id NOT IN :song_ids;
+        ''')
 
-    engine = utils.get_engine()
-    with engine.connect() as conn:
-        song_features = pd.read_sql(query, conn, params={'song_ids': tuple(song_ids)})
+        engine = utils.get_engine()
+        with engine.connect() as conn:
+            song_features = pd.read_sql(query, conn, params={'song_ids': tuple(song_ids)})
 
-    user_profile_vector = get_mean_vector(user_id)
+        user_profile_vector = get_mean_vector(user_id)
+    else:
+        query = text('''
+            SELECT * FROM song_features;
+        ''')
+
+        engine = utils.get_engine()
+        song_features = pd.read_sql(query, engine)
+
+        user_profile_vector = get_global_avg_vector()
 
     user_profile_vector = np.array(user_profile_vector).reshape(1, -1)
     song_feature_vectors = song_features.drop(columns='song_id').values
+    
+    if song_feature_vectors.shape[0] < 1 or song_feature_vectors.shape[1] != 30:
+        raise HTTPException(status_code=404, detail="No songs available for recommendations")
+
     similarities = cosine_similarity(user_profile_vector, song_feature_vectors)
 
     song_features['similarity'] = similarities.flatten()
@@ -80,7 +104,7 @@ def recommend_songs(user_id: str, top_n: int = 20, noise_factor: int = 0.1):
 
     return songs.to_dict(orient='records')
 
-def get_top_weights(song_ids: list, alpha: int = 0.05):
+def get_top_weights(song_ids: list[str], alpha: int = 0.05) -> dict[str, float]:
     if len(song_ids) == 0:
         return {}
     
@@ -91,7 +115,7 @@ def get_top_weights(song_ids: list, alpha: int = 0.05):
 
     return dict(zip(song_ids, weights)) # Dict using song_id as key and weight as value
 
-def get_rec_weights(song_ids: list, t_liked: pd.Series, alpha: int = 0.002):
+def get_rec_weights(song_ids: list[str], t_liked: Series, alpha: int = 0.002) -> dict[str, float]:
     if len(t_liked) == 0:
         return {}
     
@@ -106,7 +130,7 @@ def get_rec_weights(song_ids: list, t_liked: pd.Series, alpha: int = 0.002):
 
     return dict(zip(song_ids, weights)) # Dict using song_id as key and weight as value
 
-def get_saved_weights(song_ids: list, top_weights: dict, base_weight: int = 0.1, boost_factor: int = 0.5):
+def get_saved_weights(song_ids: list[str], top_weights: dict[str, float], base_weight: int = 0.1, boost_factor: int = 0.5) -> dict[str, float]:
     weights = [
         base_weight + top_weights.get(song_id, 0) * boost_factor
         for song_id in song_ids
@@ -115,7 +139,7 @@ def get_saved_weights(song_ids: list, top_weights: dict, base_weight: int = 0.1,
     max_weight = max(weights, default=1)
     return {song_id: weight / max_weight for song_id, weight in zip(song_ids, weights)}  # Return normalized weights
 
-def get_weighted_mean_vector(features_dict: dict):
+def get_weighted_mean_vector(features_dict: dict[str, dict[str, dict[str, NDArray[np.float64]]]]) -> NDArray[np.float64]:
     # Default values
     means = {
         'top_songs': np.zeros(30),
@@ -161,7 +185,7 @@ def get_weighted_mean_vector(features_dict: dict):
 
     return weighted_mean
 
-def get_global_avg_vector():
+def get_global_avg_vector() -> NDArray[np.float64]:
     query = '''
         SELECT * FROM song_features;
     '''
@@ -174,7 +198,7 @@ def get_global_avg_vector():
 
     return np.mean(features, axis=0)
 
-def get_mean_vector(user_id: str):
+def get_mean_vector(user_id: str) -> NDArray[np.float64]:
 
     query = text('''
         SELECT 
@@ -218,10 +242,7 @@ def get_mean_vector(user_id: str):
 
     return mean_vector
 
-def get_new_user():
-    pass
-
-def get_top_songs(user_id: str, top_n: int = 10):
+def get_top_songs(user_id: str, top_n: int = 10) -> DataFrame:
 
     engine = utils.get_engine()
 
@@ -238,14 +259,75 @@ def get_top_songs(user_id: str, top_n: int = 10):
         top_songs = pd.read_sql(query, conn, params={'user_id': user_id}).sort_values(by='top_song')
     return top_songs.head(top_n)
 
+def update_user(token: str) -> None:
+    headers = utils.get_auth_header(token)
+
+    start_time = time.time()
+    user = utils.get_user_info(token)
+
+    end_time = time.time()
+    print(f'Completed in {end_time - start_time} seconds\n')
+
+    user_id = user['user_id'].iloc[0]
+
+    result = {
+        'users': user,
+        'songs': DataFrame(columns=['song_id', 'title', 'img_url', 'preview_url']),
+        'artists': DataFrame(columns=['artist_id', 'name']),
+        'user_song_interactions': DataFrame(columns=['user_id', 'song_id', 'saved', 'top_song', 'playlist']),
+        'user_artist_interactions': DataFrame(columns=['user_id', 'artist_id', 'follows', 'top_artist']),
+        'song_artist_interactions': DataFrame(columns=['song_id', 'artist_id'])
+    }
+    
+    start_time = time.time()
+    result = utils.get_top(headers, user_id, result)
+    end_time = time.time()
+    print(f'Completed in {utils.sec_to_min(end_time - start_time)} seconds\n')
+
+    start_time = time.time()
+    result = utils.get_all_saved_tracks(headers, user_id, result)
+    end_time = time.time()
+    print(f'Completed in {utils.sec_to_min(end_time - start_time)} seconds\n')
+
+    start_time = time.time()
+    result = utils.get_followed_artists(headers, user_id, result)
+    end_time = time.time()
+    print(f'Completed in {utils.sec_to_min(end_time - start_time)} seconds\n')
+
+    start_time = time.time()
+    result = utils.get_all_playlist_tracks(headers, user_id, result)
+    end_time = time.time()
+    print(f'Completed in {utils.sec_to_min(end_time - start_time)} seconds\n')
+
+    query = '''
+        SELECT * FROM songs;
+    '''
+
+    engine = get_engine()
+    saved_songs = pd.read_sql(query, engine)
+    saved_song_ids = saved_songs['song_id'].to_list()
+
+    result['songs'] = result['songs'][~result['songs']['song_id'].isin(saved_song_ids)]
+
+    for key in result:
+        result[key] = result[key].drop_duplicates()
+
+    start_time = time.time()
+    result = get_previews(result, download=False)
+    end_time = time.time()
+    print(f'Completed in {sec_to_min(end_time - start_time)} seconds\n')
+
+    return result
+    
+
 if __name__=='__main__':
-    GET_USER = True
+    GET_USER = False
     TOP_SONGS = False
     TOP_WEIGHTS = False
     REC_WEIGHTS = False
     SAVED_WEIGHTS = False
     MEAN_VECTOR = False
-    RECOMMEND = False
+    RECOMMEND = True
 
     load_dotenv()
 
@@ -323,8 +405,8 @@ if __name__=='__main__':
             SELECT * FROM users
         '''
         users = pd.read_sql(query, engine)
-        user_id = users['user_id'].values[0]
-
+        user_id = users.loc[users['email'] == 'mscott22@terpmail.umd.edu', 'user_id'].values[0]
+                
         recs = recommend_songs(user_id, top_n=20)
         for rec in recs:
             print(rec['title'])

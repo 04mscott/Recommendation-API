@@ -1,6 +1,11 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Header, BackgroundTasks
 from pydantic import BaseModel
-import recommend
+import recommend, utils
+import logging
+import traceback
+from typing import Optional
+from dotenv import load_dotenv
+import os
 
 
 app = FastAPI()
@@ -17,39 +22,100 @@ class Recommendations(BaseModel):
     total: int
     songs: list[Song]
 
-@app.get('/')
-def root():
-    return {'Hello': 'World'}
+def validate_fastapi_token(token: str):
+    load_dotenv()
+    valid_token = os.getenv('SECRET_TOKEN')
+    if token != valid_token:
+        raise HTTPException(status_code=403, detail="Invalid API access token")
 
-# curl -X GET -H "Content-Type: application/json" '{"user_id":"..."}' 'http://127.0.0.1:8000/recommend'
+''' Test Request:
+curl -X GET "http://127.0.0.1:8000/recommend" \
+     -H "Content-Type: application/json" \
+     -H "Authorization: ly2DGr@ZOX5.3-?ve2Gq" \
+     -H "Spotify-Token: BQATg8EHkoThVgP_wCZpwcpTMqq99ZDCIWPsWO4PIdwJJaSgQBgF7_00uDtYIBhdHzosBm-TcYSh4OURZzSE19T_xCqv4knz_KvX4NiBIUbKj2zU2s01mLVAf7WY3eRWBU3XaVwdxP7yJdG0u5vVPXGxY7ffwWxCIMW7FHpCS7FiXyoB1UlPvGgRwdL2vf3Rbk5dJZ1ZZu2obBWsptvcYpIsxtwoG7cdzO4v7PNofDAX_eBnvpQg4iG5Jloq-u1sG5oT6MKNgBvehqGioIm3Xk7y" \
+     -d '{"user_id": "jzzkjx1n9mnb2hvk6r5q32n48"}'
+'''
 
 @app.get('/recommend', response_model = Recommendations)
-def get_recommendation(user: User) -> Recommendations:
+def get_recommendation(
+    user: User, 
+    fastapi_token: str = Header(..., alias="Authorization"),  # Required FastAPI token
+    spotify_token: Optional[str] = Header(None, alias="Spotify-Token")
+) -> Recommendations:
+    
+    logging.info("User request received")
+    validate_fastapi_token(fastapi_token)
+
     user_id = user.user_id
-    if recommend.check_user(user_id):
-        recs = recommend.recommend_songs(user_id)
-        return {
-            'user_id': user_id,
-            'total': len(recs),
-            'songs': recs
-        }
-    else:
-        raise HTTPException(status_code=404, detail=f'user_id {user_id} not found')
+    generic = False
+    recs = []
+    
+    try:
+        if not recommend.check_user_time(user_id):
+            result = utils.top_tracks_for_recs(spotify_token, user_id)
+            if result != 1:
+                generic = True
+                recs = recommend.recommend_songs()
+                
+        if not generic:
+            recs = recommend.recommend_songs(user_id)
 
+        logging.info(f"Successfully retrieved {'generic' if generic else 'personalized'} recommendations for user {user_id}")
+        return {
+                'user_id': user_id,
+                'total': len(recs),
+                'songs': recs
+            }
+    
+    except HTTPException as http_err:
+        logging.warning(f"HTTP error for user {user_id}: {http_err.detail}")
+        raise
 
-@app.post('/save-data/{type}')
-def save_data(type: str, token: str):
-    if type == 'new_user':
-        return {
-            'new_user': 'saving data'
-        }
-    elif type == 'top_songs':
-        return {
-            'top_songs': 'saving top_songs'
-        }
-    else:
-        raise HTTPException(status_code=400, detail=f"Invalid extension '{type}'")
+    except Exception as e:
+        logging.error(f"Error recommending songs for user {user_id}: {e}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail='An unexpected error occurred while recommending songs.')
+
+@app.post('/save-data')
+def save_data(
+    user: User,
+    fastapi_token: str = Header(..., alias="Authorization"),  # Required FastAPI token
+    spotify_token: Optional[str] = Header(None, alias="Spotify-Token")
+):
+    
+    logging.info("User request received")
+    validate_fastapi_token(fastapi_token)
+
+    user_id = user.user_id
+    user_exists = recommend.check_user_time(user_id, time=False)
+
+    try:
+        
+        if user_exists:
+            up_to_date = recommend.check_user_time(user_id)
+            if up_to_date:
+                logging.info(f"User {user_id} up to date")
+                return {'message': f'User {user_id} up to date'}
+            else:
+                recommend.update_user(user_id, spotify_token)
+                logging.info(f"Successfully updated user data for {user_id}")
+                return {'message': f'User {user_id} updated'}
+            
+        else:
+            tables = utils.get_init_tables(spotify_token)
+            utils.add_df_to_db(tables)
+            utils.analyze_missing_songs(user_id)
+            logging.info(f"Successfully saved user data for {user_id}")
+            return {'message': f'Successfully saved user {user_id}'}
+    
+    except HTTPException as http_err:
+        logging.warning(f"HTTP error for user {user_id}: {http_err.detail}")
+        raise
+
+    except Exception as e:
+        logging.error(f"Error saving data for user {user_id}: {e}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail='An unexpected error occurred while saving user data.')
+    
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="127.0.0.1", port=8000)
