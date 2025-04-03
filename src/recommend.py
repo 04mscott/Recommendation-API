@@ -8,8 +8,7 @@ from sqlalchemy import text
 import pandas as pd
 import numpy as np
 import random
-import utils
-import time
+from . import utils
 
 
 def check_user_time(user_id: str, time: bool = True) -> bool:
@@ -263,66 +262,6 @@ def get_top_songs(user_id: str, top_n: int = 10) -> DataFrame:
         top_songs = pd.read_sql(query, conn, params={'user_id': user_id}).sort_values(by='top_song')
     return top_songs.head(top_n)
 
-def update_user(token: str) -> None:
-    headers = utils.get_auth_header(token)
-
-    start_time = time.time()
-    user = utils.get_user_info(token)
-
-    end_time = time.time()
-    print(f'Completed in {end_time - start_time} seconds\n')
-
-    user_id = user['user_id'].iloc[0]
-
-    result = {
-        'users': user,
-        'songs': DataFrame(columns=['song_id', 'title', 'img_url', 'preview_url']),
-        'artists': DataFrame(columns=['artist_id', 'name']),
-        'user_song_interactions': DataFrame(columns=['user_id', 'song_id', 'saved', 'top_song', 'playlist']),
-        'user_artist_interactions': DataFrame(columns=['user_id', 'artist_id', 'follows', 'top_artist']),
-        'song_artist_interactions': DataFrame(columns=['song_id', 'artist_id'])
-    }
-    
-    start_time = time.time()
-    result = utils.get_top(headers, user_id, result)
-    end_time = time.time()
-    print(f'Completed in {utils.sec_to_min(end_time - start_time)} seconds\n')
-
-    start_time = time.time()
-    result = utils.get_all_saved_tracks(headers, user_id, result)
-    end_time = time.time()
-    print(f'Completed in {utils.sec_to_min(end_time - start_time)} seconds\n')
-
-    start_time = time.time()
-    result = utils.get_followed_artists(headers, user_id, result)
-    end_time = time.time()
-    print(f'Completed in {utils.sec_to_min(end_time - start_time)} seconds\n')
-
-    start_time = time.time()
-    result = utils.get_all_playlist_tracks(headers, user_id, result)
-    end_time = time.time()
-    print(f'Completed in {utils.sec_to_min(end_time - start_time)} seconds\n')
-
-    query = '''
-        SELECT * FROM songs;
-    '''
-
-    engine = utils.get_engine()
-    saved_songs = pd.read_sql(query, engine)
-    saved_song_ids = saved_songs['song_id'].to_list()
-
-    result['songs'] = result['songs'][~result['songs']['song_id'].isin(saved_song_ids)]
-
-    for key in result:
-        result[key] = result[key].drop_duplicates()
-
-    start_time = time.time()
-    result = utils.get_previews(result, download=False)
-    end_time = time.time()
-    print(f'Completed in {utils.sec_to_min(end_time - start_time)} seconds\n')
-
-    return result
-    
 
 if __name__=='__main__':
     GET_USER = False

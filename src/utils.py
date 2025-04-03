@@ -1,11 +1,12 @@
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 from sqlalchemy import create_engine, text
-from pandas import DataFrame
+from sqlalchemy.orm import sessionmaker
 from sqlalchemy.engine import Engine
 from pydub.utils import mediainfo
 from fastapi import HTTPException
 from numpy.typing import NDArray
 from dotenv import load_dotenv
+from pandas import DataFrame
 from requests import get
 import librosa as lr
 import pandas as pd
@@ -32,6 +33,16 @@ youtube_key = os.getenv('YOUTUBE_KEY')
 
 CURR_DIR = current_directory_os = os.getcwd()
 
+class RateLimitException(Exception):
+    '''Raise when YouTube rate limits are expected'''
+    pass
+
+
+def validate_fastapi_token(token: str):
+    load_dotenv()
+    valid_token = os.getenv('SECRET_TOKEN')
+    if token != valid_token:
+        raise HTTPException(status_code=403, detail="Invalid API access token")
 
 def safe_api_call(url: str, headers: dict, params: dict = None, max_retries: int = 3) -> dict[str, str] | list[str] | None:
     retries = 0
@@ -79,7 +90,9 @@ def get_engine() -> Engine:
 # Table 5: Artist <-> Song interactions
 # Table 6: User <-> Song Interactions
 # Table 7: User <-> Artist Interactions
-def get_init_tables(token: str) -> dict[str, DataFrame] | None:
+def get_init_tables(user_id: str, token: str, update: bool = False) -> dict[str, DataFrame] | None:
+    user_songs = get_all_user_songs(user_id) if update else None
+
     headers = get_auth_header(token)
 
     start_time = time.time()
@@ -87,8 +100,6 @@ def get_init_tables(token: str) -> dict[str, DataFrame] | None:
 
     end_time = time.time()
     print(f'Completed in {end_time - start_time} seconds\n')
-
-    user_id = user['user_id'].iloc[0]
 
     result = {
         'users': user,
@@ -105,7 +116,7 @@ def get_init_tables(token: str) -> dict[str, DataFrame] | None:
     print(f'Completed in {sec_to_min(end_time - start_time)} seconds\n')
 
     start_time = time.time()
-    result = get_all_saved_tracks(headers, user_id, result)
+    result = get_all_saved_tracks(headers, user_id, result, user_songs)
     end_time = time.time()
     print(f'Completed in {sec_to_min(end_time - start_time)} seconds\n')
 
@@ -114,10 +125,11 @@ def get_init_tables(token: str) -> dict[str, DataFrame] | None:
     end_time = time.time()
     print(f'Completed in {sec_to_min(end_time - start_time)} seconds\n')
 
-    start_time = time.time()
-    result = get_all_playlist_tracks(headers, user_id, result)
-    end_time = time.time()
-    print(f'Completed in {sec_to_min(end_time - start_time)} seconds\n')
+    if not update:
+        start_time = time.time()
+        result = get_all_playlist_tracks(headers, user_id, result)
+        end_time = time.time()
+        print(f'Completed in {sec_to_min(end_time - start_time)} seconds\n')
 
     query = '''
         SELECT * FROM songs;
@@ -136,6 +148,11 @@ def get_init_tables(token: str) -> dict[str, DataFrame] | None:
     result = get_previews(result)
     end_time = time.time()
     print(f'Completed in {sec_to_min(end_time - start_time)} seconds\n')
+
+    missing_previews = result['songs'].loc[result['songs']['preview_url'] == '', 'song_id'].to_list()
+    for key, df in result.items():
+        if 'song_id' in df.columns:
+            result[key] = df[~df['song_id'].isin(missing_previews)]
 
     return result
 
@@ -204,7 +221,7 @@ def get_top(headers: dict[str, str], user_id: str, result: dict[str, DataFrame],
         result['user_artist_interactions'] = pd.concat([result['user_artist_interactions'], DataFrame(data=user_artist_interaction_list, columns=result['user_artist_interactions'].columns)])
     return result
 
-def get_all_saved_tracks(headers: dict[str, str], user_id: str, result: dict[str, DataFrame]) -> dict[str, DataFrame]:
+def get_all_saved_tracks(headers: dict[str, str], user_id: str, result: dict[str, DataFrame], user_songs: DataFrame | None = None) -> dict[str, DataFrame]:
     print('-----------------Getting Saved Tracks-----------------')
 
     url = 'https://api.spotify.com/v1/me/tracks'
@@ -230,6 +247,12 @@ def get_all_saved_tracks(headers: dict[str, str], user_id: str, result: dict[str
 
         for item in json_response['items']:
             track = item['track']
+
+            song_id = track['id']
+
+            if user_songs is not None and song_id not in user_songs:
+                break
+
             songs_list.append([track['id'], track['name'], track['album']['images'][0]['url'], '']) # Add Song
 
             # Add User Song Interactions (checking to see if already in table)
@@ -616,8 +639,6 @@ def download_audio(song_id: str, url: str, folder_path: str) -> list[str]:
 
     output_template = os.path.join(folder_path, f"{song_id}.%(ext)s")
 
-    cookies_path = os.path.join(os.path.dirname(CURR_DIR), 'cookies.txt')
-
     ydl_opts = {
         'format': 'bestaudio/best',
         'outtmpl': output_template,
@@ -627,7 +648,6 @@ def download_audio(song_id: str, url: str, folder_path: str) -> list[str]:
             'preferredquality': '192',
         }],
         'quiet': True,
-        'cookies': cookies_path,
     }
 
     try:
@@ -752,13 +772,40 @@ def validate_audio_file(file_path: str) -> bool:
     info = mediainfo(file_path)
     return 'duration' in info and float(info['duration']) > 0
 
+def remove_song_from_db(song_id: str) -> None:
+    """Remove a song from all related tables using SQLAlchemy."""
+    engine = get_engine()  # Get the SQLAlchemy engine
+    Session = sessionmaker(bind=engine)
+    session = Session()
+
+    try:
+        print(f"Removing {song_id} from database...")
+
+        tables = ["user_song_interactions", "song_artist_interactions", "songs"]
+        for table in tables:
+            session.execute(text(f"DELETE FROM {table} WHERE song_id = :song_id"), {"song_id": song_id})
+
+        session.commit()  # Commit transaction
+        print(f"Song {song_id} removed successfully.")
+
+    except Exception as e:
+        session.rollback()  # Rollback on error
+        print(f"Error removing {song_id}: {e}")
+
+    finally:
+        session.close()
+
 def analyze_song(song_path: str, limit: int = 15*60) -> NDArray[any] | None:
+
     info = mediainfo(song_path)
     duration = float(info['duration'])
     song_id = os.path.splitext(os.path.basename(song_path))[0]
+
     if duration > limit:
         print(f'Skipping {song_id} due to long length')
+        remove_song_from_db(song_id)
         return None
+    
     try:
         with audioread.audio_open(song_path) as audio:
             sr = audio.samplerate
@@ -812,10 +859,13 @@ def analyze_song(song_path: str, limit: int = 15*60) -> NDArray[any] | None:
         print(f"Unexpected error while analyzing {song_path}: {e}")
         return None
 
-def analyze_songs(songs: DataFrame, prompt: bool = False, batch_size: int = 20, max_workers: int = 2) -> None:
+def analyze_songs(songs: DataFrame, save: str = 'every_batch', batch_size: int = 20, max_workers: int = 4) -> None:
 
     if len(songs) == 0 or batch_size == 0:
         return None
+    
+    if save != 'every_batch' and save != 'when_finished':
+        raise ValueError("Invalid 'save' value")
 
     print('-----------------Analyzing Songs-----------------')
 
@@ -838,6 +888,7 @@ def analyze_songs(songs: DataFrame, prompt: bool = False, batch_size: int = 20, 
     print(f'{len(batches)} Batches')
 
     features = []
+    rate_limit = False
     
     for i, batch in enumerate(batches):
         print(f'\nProcessing batch {i + 1}...')
@@ -850,19 +901,22 @@ def analyze_songs(songs: DataFrame, prompt: bool = False, batch_size: int = 20, 
                 song_ids.append(song_id)
             except IndexError:
                 print(f"Skipping {song_id} due to missing preview_url")
+                remove_song_from_db(song_id)
 
         if not preview_urls:
             continue
         
         folder_path = os.path.join(CURR_DIR, 'temp_downloads')
-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
-            downloads = list(executor.map(download_audio, song_ids, preview_urls, [folder_path] * len(song_ids)))
-            downloads = [download for download in downloads if download is not None and validate_audio_file(download)]
-            batch_results = list(executor.map(analyze_song, downloads))
+    
+        downloads = list(map(download_audio, song_ids, preview_urls, [folder_path] * len(song_ids))) # Download songs concurrently
+        downloads = [download for download in downloads if download is not None and validate_audio_file(download)] # Filter out failed downloads
+        if len(downloads) < batch_size / 2: # Exit after analysis due to expected rate limits
+            rate_limit = True
+        batch_results = list(map(analyze_song, downloads)) # Analyze songs concurrently
 
+        # Remove previously downloaded files
         for path in downloads:
-            os.remove(path)
-
+            os.remove(path) 
             
         count = 0
         for song_features in batch_results:
@@ -871,28 +925,19 @@ def analyze_songs(songs: DataFrame, prompt: bool = False, batch_size: int = 20, 
                 features.append(song_features)
         print(f'Features extracted for {count} song(s)')
 
-    # print(f"Features list: {features}")
-    song_features_df = DataFrame(data=features, columns=columns).dropna()
-    song_features_df['song_id'] = song_features_df['song_id'].apply(str)
-    numeric_columns = columns[1:]
-    song_features_df[numeric_columns] = song_features_df[numeric_columns].apply(pd.to_numeric)
+        # Save and/or exit as needed
+        if (save == 'every_batch' or rate_limit) and len(features) > 0:
+            save_features(columns, features)
+            features = []
 
-    if prompt:
-        while True:
-            save = input('Save features to database? [y/n]')
-            if save == 'y':
-                add_df_to_db({'song_features':song_features_df})
-                break
-            if save == 'n':
-                break
-            else:
-                print('Invalid answer')
-    else:
-        add_df_to_db({'song_features': song_features_df})
+        if rate_limit:
+            print('Rate limit detected, raising exception...')
+            raise RateLimitException("Download rate limit hit, retrying later.")
 
-def analyze_missing_songs(user_id: str, limit: int = 100) -> None:
+    if save == 'when_finished' and len(features) > 0:
+        save_features(columns, features)
 
-    # previous_count = None
+def analyze_missing_songs(user_id: str) -> None:
 
     print('Retrieving missing songs...')
     query = text(f'''
@@ -910,15 +955,14 @@ def analyze_missing_songs(user_id: str, limit: int = 100) -> None:
     with engine.connect() as conn:
         missing_songs = pd.read_sql(query, conn, params={'user_id': user_id})
 
-    # current_count = len(missing_songs)
+    analyze_songs(missing_songs)
 
-    # if current_count == 0 or current_count == previous_count and current_count < limit:
-    #     # Stop if no songs left or progress has stalled
-    #     break
-
-    analyze_songs(missing_songs, batch_size=20)
-
-    # previous_count = current_count
+def save_features(columns, features: list[NDArray[any]]) -> None:
+    song_features_df = DataFrame(data=features, columns=columns).dropna()
+    song_features_df['song_id'] = song_features_df['song_id'].apply(str)
+    numeric_columns = columns[1:]
+    song_features_df[numeric_columns] = song_features_df[numeric_columns].apply(pd.to_numeric)
+    add_df_to_db({'song_features': song_features_df})
 
 def sec_to_min(seconds: int) -> str:
     if seconds < 60:
@@ -950,8 +994,9 @@ if __name__=='__main__':
     SONG_FEATURES = False
     FEATURIZE_TOP_SONGS = False
     FEATURIZE_DATA_SET = False
-    FEATURIZE_MISSING_SONGS = True
-    LOAD_FEATURES = False
+    FEATURIZE_MISSING_SONGS = False
+    LOAD_FEATURES = True
+    TEST_COOKIES = False
     
 
     test_token = os.getenv('USER_TEST_TOKEN')
@@ -1191,7 +1236,7 @@ if __name__=='__main__':
         start_time = time.time()
 
         test_id = os.getenv('TEST_ID_2')
-        analyze_missing_songs(test_id, limit=100)
+        analyze_missing_songs(test_id)
 
         end_time = time.time()
         print(f'Completed in {sec_to_min(end_time-start_time)}')
@@ -1205,3 +1250,7 @@ if __name__=='__main__':
         print(song_features)
         print(len(song_features))
         print(song_features['song_id'].unique)
+
+    if TEST_COOKIES:
+        cookies_path = os.path.join(os.path.dirname(CURR_DIR), COOKIES_FILE)
+        print(cookies_path)
