@@ -25,21 +25,36 @@ This project serves as the backend engine for a full-stack music recommender sys
 
 ## 📂 Project Structure
 ```bash
-src/ ├── api/ # FastAPI route handlers │ ├── recommend.py │ └── save_data.py ├── celery_worker/ # Celery background tasks │ └── analyze_and_store.py ├── utils/ # Embedding, similarity, and helper logic ├── config.py # Environment setup ├── main.py # FastAPI entrypoint └── celery_worker.py # Celery entrypoint
+Recommendation-API
+├── src/
+│   ├── utils.py           # Interacting with Spotify API and saving data to database
+│   ├── recommend.py       # Embedding, similarity, and helper logic
+│   ├── celery_config.py   # Celery environment setup
+│   ├── main.py            # FastAPI entrypoint
+│   └── celery_tasks.py    # Celery tasks for async computation
+├── .dockerignore          # Ignore files
+├── .gitignore             # 
+├── compose.yml            # Configuration specs for Docker
+├── Dockerfile             # Setup for Docker
+├── README.md              # What you're looking at right now!
+└── requirements.txt       # All required libraries/packages
 ```
 ---
 
 ## 🧪 Example Use Case
 
-1. A user selects a Spotify track in the React frontend.
-2. The frontend sends a `POST` request to the `/save-data` endpoint.
-3. A Celery task is triggered to:
-   - Fetch audio features from Spotify
-   - Generate a list of similar songs
-   - Search for related YouTube videos
+1. A new user logs into the BeatMatch app.
+2. The Spring Boot backend sends a `POST` request to the `/save-data` endpoint.
+4. A Celery task is triggered to:
+   - Fetch all songs associated with user's Spotify acount
+   - Search YouTube API for official song audios for preview playback and analysis
    - Store the full result set in MySQL
-4. The frontend polls `/status/{task_id}` to check when processing is complete.
+   - Trigers a new Celery task to analyze the songs saved for the given user
+   - Songs are process in batches
+   - Temporarily downloaded, analyzed using librosa, stored in MySQL, remove downloaded files
 5. Once ready, the frontend hits `/recommend` to retrieve the final list of tracks + YouTube links.
+   - In case user data is not available/taking too long, general recommendations are given using the mean feature vector of the entire dataset
+6. The backend polls `/status/{task_id}` to check when processing is complete and notifies user when their recommendations are ready to be fully personalized.
 
 ---
 
@@ -47,7 +62,6 @@ src/ ├── api/ # FastAPI route handlers │ ├── recommend.py │ └�
 
 - Add JWT-based multi-user authentication
 - Introduce collaborative filtering or hybrid models
-- Implement caching for commonly requested songs
 - Expand to support genres or mood-based filtering
 - Integrate with playlist-building and export features
 
@@ -66,4 +80,4 @@ University of Maryland – College Park
 
 ## 📌 Notes
 
-> This API was built specifically to serve a React + Spring Boot frontend app for a full-stack music recommendation system. It is designed to run in Docker containers with background task support and optimized external API interaction. While setup and deployment details are not included in this README, the system is fully containerized and production-ready.
+> This API was built specifically to serve a React + Spring Boot app for a full-stack music recommendation system. It is designed to run in Docker containers with background task support and optimized external API interaction. While setup and deployment details are not included in this README, the system is fully containerized and production-ready.
