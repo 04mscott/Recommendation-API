@@ -39,7 +39,7 @@ def recommend_songs(user_id: str | None = None, top_n: int = 20, noise_factor: i
 
     if user_id:
         song_ids = utils.get_all_user_songs(user_id)
-
+        
         query = text('''
             SELECT * FROM song_features
             WHERE song_id NOT IN :song_ids;
@@ -270,7 +270,7 @@ if __name__=='__main__':
     REC_WEIGHTS = False
     SAVED_WEIGHTS = False
     MEAN_VECTOR = False
-    RECOMMEND = True
+    RECOMMEND = False
 
     load_dotenv()
 

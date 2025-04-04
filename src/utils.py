@@ -80,6 +80,7 @@ def get_auth_header(token: str) -> dict[str, str]:
 
 def get_engine() -> Engine:
     connection_string = f'mysql+pymysql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}'
+    print(connection_string)
     return create_engine(connection_string)
 
 # Returns 7 pandas dataframes to be added to database
@@ -413,8 +414,7 @@ def get_followed_artists(headers: dict[str, str], user_id: str, result: dict[str
     return result
 
 def add_df_to_db(dfs: dict[str, DataFrame]) -> None:
-    connection_string = f'mysql+mysqlconnector://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}'
-    engine = create_engine(connection_string)
+    engine = get_engine()
     if 'users' in dfs and len(dfs['users']) > 0:
         users = dfs['users']
         users_data = users.to_dict(orient='records')
@@ -975,7 +975,9 @@ def sec_to_min(seconds: int) -> str:
         ret += f'{int(seconds/60)} minute{'s' if seconds/60 > 1 else ''} {seconds%60} seconds'
         return ret
 
+
 if __name__=='__main__':
+    TRANSFER = False
     TOP_REC = False
     USER = False
     GENRE = False
@@ -995,12 +997,12 @@ if __name__=='__main__':
     FEATURIZE_TOP_SONGS = False
     FEATURIZE_DATA_SET = False
     FEATURIZE_MISSING_SONGS = False
-    LOAD_FEATURES = True
+    LOAD_FEATURES = False
     TEST_COOKIES = False
     
 
     test_token = os.getenv('USER_TEST_TOKEN')
-    
+    db_host = 'localhost'
 
     if TOP_REC:
 
@@ -1186,7 +1188,7 @@ if __name__=='__main__':
 
     if LOAD_DATA:
 
-        tables = ['users', 'songs', 'artists', 'artist_genres', 'user_song_interactions', 'user_artist_interactions', 'song_artist_interactions']
+        tables = ['users', 'songs', 'song_features', 'artists', 'user_song_interactions', 'user_artist_interactions', 'song_artist_interactions']
         result = load_tables(tables)
 
         for key in result:
