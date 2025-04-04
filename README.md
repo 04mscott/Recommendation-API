@@ -75,8 +75,8 @@ Recommendation-API
 Third year CS major (Data Science track), Statistics minor  
 University of Maryland – College Park  
 🌐 Website: [masonscott.net](https://masonscott.net)  
-🐙 GitHub: [@04mscott](https://github.com/04mscott)  
-🔗 LinkedIn: [Mason T. Scott](https://www.linkedin.com/in/mason-t-scott/)
+🐙 GitHub: [04mscott](https://github.com/04mscott)  
+🔗 LinkedIn: [Mason Scott](https://www.linkedin.com/in/mason-t-scott/)
 
 ---
 
