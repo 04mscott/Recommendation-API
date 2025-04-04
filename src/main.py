@@ -1,9 +1,9 @@
 from fastapi import FastAPI, HTTPException, Header
-from .user_tasks import save_user_data
+from celery_tasks import save_user_data
 from celery.result import AsyncResult
-from .celery_config import celery
+from celery_config import celery
 from pydantic import BaseModel
-from src import recommend, utils
+import recommend, utils
 import traceback
 import logging
 

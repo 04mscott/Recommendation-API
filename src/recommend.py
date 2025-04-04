@@ -8,7 +8,7 @@ from sqlalchemy import text
 import pandas as pd
 import numpy as np
 import random
-from . import utils
+import utils
 
 
 def check_user_time(user_id: str, time: bool = True) -> bool:

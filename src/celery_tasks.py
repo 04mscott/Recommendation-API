@@ -1,19 +1,18 @@
-from .utils import get_init_tables, add_df_to_db, validate_fastapi_token
+from utils import get_init_tables, add_df_to_db, validate_fastapi_token, analyze_missing_songs, RateLimitException
+from datetime import datetime, timedelta, timezone
 from fastapi import Header, HTTPException
-from .recommend import check_user_time
-from .celery_config import celery
+from recommend import check_user_time
+from celery_config import celery
 import traceback
 import logging
 
 
-@celery.task(name='user_tasks.save_user_data', queue="user_queue")
+@celery.task(name='celery_tasks.save_user_data', queue="user_queue")
 def save_user_data(
     user_id: str,
     fastapi_token: str = Header(..., alias="Authorization"),
     spotify_token: str | None = Header(None, alias="Spotify-Token")
 ) -> dict[str, list[str]]:
-    
-    from .song_tasks import analyze_user_songs
 
     logging.info(f"Started task for user {user_id}")
     validate_fastapi_token(fastapi_token)
@@ -63,3 +62,27 @@ def save_user_data(
     except Exception as e:
         logging.error(f"Error saving data for user {user_id}: {e}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail='An unexpected error occurred while saving user data.')
+    
+
+@celery.task(name='celery_tasks.analyze_user_songs', queue='song_queue', bind=True)
+def analyze_user_songs(self, user_id: str, retries: int = 0, max_retries: int = 0):
+    try:
+        analyze_missing_songs(user_id)
+        return {'message': f'Analysis of user {user_id} library complete'}
+    except RateLimitException as exc:
+
+        if max_retries >= 5:
+            logging.error(f"Max retries exceeded for user {user_id}. Aborting task.")
+            raise exc
+
+        # Start at 10 minutes and then increase exponentially up to 2 hours
+        countdown = min(600 * (2 ** retries), 7200)
+
+        eta_time = datetime.now(timezone.utc) + timedelta(seconds=countdown)
+
+        # Unlimited retries up to 2 hours, then max of 5
+        new_max_retries = max_retries + 1 if countdown == 7200 else max_retries
+
+        logging.info(f'Rate limit detected for user {user_id}. Trying again at {eta_time}.')
+        self.apply_async(args=[user_id, retries + 1, new_max_retries], eta=eta_time)
+        

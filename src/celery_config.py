@@ -4,14 +4,14 @@ import sys
 import os
 
 # Add the src directory to the Python path
-sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
+sys.path.append('/app/src')
 
-# load_dotenv()
-REDIS_URL = 'redis://localhost:6379/0'
+load_dotenv()
+REDIS_URL = os.getenv('REDIS_URL', default='redis://localhost:6379/0')
 
 celery = Celery(
     "tasks",
     broker=REDIS_URL,
     backend=REDIS_URL,
-    include=["song_tasks", "user_tasks"]
+    include=["celery_tasks"]
 )

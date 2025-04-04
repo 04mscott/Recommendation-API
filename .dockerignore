@@ -1,0 +1,8 @@
+venv
+.venv
+README.md
+__pycache__
+.git
+.gitignore
+.DS_Store
+render-build.sh
