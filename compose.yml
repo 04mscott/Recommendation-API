@@ -52,7 +52,6 @@ services:
       MYSQL_PASSWORD: ${DB_PASSWORD}
     ports:
       - "3306:3306"  # Expose MySQL port
-    # command: --skip-grant-tables --skip-networking
     networks:
       - my_network
     volumes:
