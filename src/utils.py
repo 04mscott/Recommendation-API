@@ -29,7 +29,6 @@ db_port = os.getenv("DB_PORT")
 db_user = os.getenv("DB_USER")
 db_password = os.getenv("DB_PASSWORD")
 db_name = os.getenv("DB_NAME")
-youtube_key = os.getenv('YOUTUBE_KEY')
 
 CURR_DIR = current_directory_os = os.getcwd()
 
@@ -942,19 +941,19 @@ def analyze_missing_songs(user_id: str) -> None:
     print('Retrieving missing songs...')
     query = text(f'''
             WITH user_songs as(
-                SELECT s.* FROM songs
+                SELECT s.* FROM songs s
                 INNER JOIN user_song_interactions usi ON s.song_id = usi.song_id
                 WHERE usi.user_id = :user_id
             )
-            SELECT s.* FROM songs s
-            LEFT JOIN song_features sf ON s.song_id = sf.song_id
+            SELECT us.* FROM user_songs us
+            LEFT JOIN song_features sf ON us.song_id = sf.song_id
             WHERE sf.song_id IS NULL;
         ''')
 
     engine = get_engine()
     with engine.connect() as conn:
         missing_songs = pd.read_sql(query, conn, params={'user_id': user_id})
-
+    print(missing_songs)
     analyze_songs(missing_songs)
 
 def save_features(columns, features: list[NDArray[any]]) -> None:

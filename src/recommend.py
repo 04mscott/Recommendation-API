@@ -11,7 +11,7 @@ import random
 import utils
 
 
-def check_user_time(user_id: str, time: bool = True) -> bool:
+def check_user_time(user_id: str, t: bool = True) -> bool:
     try:
         query = text('''
             SELECT user_id, last_updated FROM users
@@ -26,10 +26,7 @@ def check_user_time(user_id: str, time: bool = True) -> bool:
             return False
 
         last_updated = user_data['last_updated'].values[0]
-        if time:
-            return (pd.Timestamp.now() - last_updated).total_seconds() / 3600 < 24
-        else: 
-            return True
+        return t or (pd.Timestamp.now() - last_updated).total_seconds() / 3600 < 24
 
     except Exception as e:
         print(f'Error checking user_id: {e}')
