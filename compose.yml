@@ -8,9 +8,12 @@ services:
       - .env
     depends_on:
       - redis
+      - mysql
     command: python src/main.py
     volumes:
       - .:/app
+    networks:
+      - my_network
 
   redis:
     image: redis:latest
@@ -20,6 +23,8 @@ services:
       - "6379:6379"
     environment:
       - REDIS_URL=redis://redis:6379/0
+    networks:
+      - my_network
 
 
   celery_worker:
@@ -30,6 +35,35 @@ services:
     depends_on:
       - redis
       - fastapi
+      - mysql
     command: celery -A src.celery_config worker --loglevel=info --queues song_queue,user_queue
     volumes:
       - .:/app
+    networks:
+      - my_network
+
+  mysql:
+    image: mysql:8.0
+    container_name: mysql_db
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${DB_NAME}
+      MYSQL_USER: ${DB_USER}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+    ports:
+      - "3306:3306"  # Expose MySQL port
+    # command: --skip-grant-tables --skip-networking
+    networks:
+      - my_network
+    volumes:
+      - mysql_data:/var/lib/mysql
+    restart: always
+
+
+networks:
+  my_network:  
+    driver: bridge
+
+volumes:
+  mysql_data:
+    driver: local
