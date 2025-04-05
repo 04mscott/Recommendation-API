@@ -18,14 +18,11 @@ def save_user_data(
     validate_fastapi_token(fastapi_token)
     
     user_exists = check_user_time(user_id, t=False)
-    print(user_exists)
     try:
         
         if user_exists:
             up_to_date = check_user_time(user_id)
-            print(up_to_date)
             if up_to_date:
-                logging.info(f"User {user_id} up to date")
                 return {'message': f'User {user_id} up to date'}
             else:
                 try:

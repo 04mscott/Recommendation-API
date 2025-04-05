@@ -79,7 +79,6 @@ def get_auth_header(token: str) -> dict[str, str]:
 
 def get_engine() -> Engine:
     connection_string = f'mysql+pymysql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}'
-    print(connection_string)
     return create_engine(connection_string)
 
 # Returns 7 pandas dataframes to be added to database

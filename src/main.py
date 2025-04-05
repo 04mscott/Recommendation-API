@@ -91,7 +91,7 @@ def save_data(
     user: User,
     fastapi_token: str = Header(..., alias="Authorization"),
     spotify_token: str | None = Header(None, alias="Spotify-Token")
-) -> Message:
+) -> Message: 
     user_id = user.user_id
     task = save_user_data.apply_async(args=[user_id, fastapi_token, spotify_token])
     return {"message": "Task started", "task_id": task.id}
