@@ -13,17 +13,10 @@ app = FastAPI()
 class User(BaseModel):
     user_id: str
 
-class Song(BaseModel):
-    song_id: str
-    title: str
-    artists: str
-    img_url: str
-    preview_url: str
-
 class Recommendation(BaseModel):
     user_id: str
     total: int
-    songs: list[Song]
+    song_ids: list[str]
 
 class Message(BaseModel):
     message: str
@@ -56,7 +49,7 @@ def get_recommendation(
 
     user_id = user.user_id
     generic = False
-    recs = []
+    recs = {}
     
     try:
         if not recommend.check_user_time(user_id):
@@ -74,8 +67,8 @@ def get_recommendation(
         logging.info(f"Successfully retrieved {'generic' if generic else 'personalized'} recommendations for user {user_id}")
         return {
                 'user_id': user_id,
-                'total': len(recs),
-                'songs': recs
+                'total': len(recs['song_ids']),
+                'song_ids': recs['song_ids']
             }
     
     except HTTPException as http_err:

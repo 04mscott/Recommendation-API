@@ -32,7 +32,7 @@ def check_user_time(user_id: str, t: bool = True) -> bool:
         print(f'Error checking user_id: {e}')
         return False
 
-def recommend_songs(user_id: str | None = None, top_n: int = 20, noise_factor: int = 0.1) -> list[dict[str, any]]:
+def recommend_songs(user_id: str | None = None, top_n: int = 20, noise_factor: int = 0.1) -> dict[str, list[str]]:
 
     if user_id:
         song_ids = utils.get_all_user_songs(user_id)
@@ -83,26 +83,27 @@ def recommend_songs(user_id: str | None = None, top_n: int = 20, noise_factor: i
 
 
     song_ids = recommended_songs['song_id'].to_list()
+    return {'song_ids': song_ids}
 
-    query = text("""
-        SELECT 
-            s.song_id,
-            s.title,
-            GROUP_CONCAT(a.name ORDER BY a.name SEPARATOR ', ') AS artists,
-            s.img_url,
-            s.preview_url
-        FROM songs s
-        LEFT JOIN song_artist_interactions sai ON s.song_id = sai.song_id
-        LEFT JOIN artists a ON sai.artist_id = a.artist_id
-        WHERE s.song_id IN :song_ids
-        GROUP BY s.song_id, s.title, s.img_url, s.preview_url;
-    """)
+    # query = text("""
+    #     SELECT 
+    #         s.song_id,
+    #         s.title,
+    #         GROUP_CONCAT(a.name ORDER BY a.name SEPARATOR ', ') AS artists,
+    #         s.img_url,
+    #         s.preview_url
+    #     FROM songs s
+    #     LEFT JOIN song_artist_interactions sai ON s.song_id = sai.song_id
+    #     LEFT JOIN artists a ON sai.artist_id = a.artist_id
+    #     WHERE s.song_id IN :song_ids
+    #     GROUP BY s.song_id, s.title, s.img_url, s.preview_url;
+    # """)
     
-    engine = utils.get_engine()
-    with engine.connect() as conn:
-        songs = pd.read_sql(query, conn, params={'song_ids': tuple(song_ids)})
+    # engine = utils.get_engine()
+    # with engine.connect() as conn:
+    #     songs = pd.read_sql(query, conn, params={'song_ids': tuple(song_ids)})
 
-    return songs.to_dict(orient='records')
+    # return songs.to_dict(orient='records')
 
 def get_top_weights(song_ids: list[str], alpha: int = 0.05) -> dict[str, float]:
     if len(song_ids) == 0:
@@ -267,7 +268,7 @@ if __name__=='__main__':
     REC_WEIGHTS = False
     SAVED_WEIGHTS = False
     MEAN_VECTOR = False
-    RECOMMEND = False
+    RECOMMEND = True
 
     load_dotenv()
 

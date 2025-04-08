@@ -1,4 +1,4 @@
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.engine import Engine
@@ -905,12 +905,13 @@ def analyze_songs(songs: DataFrame, save: str = 'every_batch', batch_size: int =
             continue
         
         folder_path = os.path.join(CURR_DIR, 'temp_downloads')
-    
-        downloads = list(map(download_audio, song_ids, preview_urls, [folder_path] * len(song_ids))) # Download songs concurrently
-        downloads = [download for download in downloads if download is not None and validate_audio_file(download)] # Filter out failed downloads
-        if len(downloads) < batch_size / 2: # Exit after analysis due to expected rate limits
-            rate_limit = True
-        batch_results = list(map(analyze_song, downloads)) # Analyze songs concurrently
+
+        with ProcessPoolExecutor() as executor:
+            downloads = list(executor.map(download_audio, song_ids, preview_urls, [folder_path] * len(song_ids))) # Download songs concurrently
+            downloads = [download for download in downloads if download is not None and validate_audio_file(download)] # Filter out failed downloads
+            if len(downloads) < batch_size / 2: # Exit after analysis due to expected rate limits
+                rate_limit = True
+            batch_results = list(executor.map(analyze_song, downloads)) # Analyze songs concurrently
 
         # Remove previously downloaded files
         for path in downloads:
@@ -948,6 +949,12 @@ def analyze_missing_songs(user_id: str) -> None:
             LEFT JOIN song_features sf ON us.song_id = sf.song_id
             WHERE sf.song_id IS NULL;
         ''')
+
+    query = '''
+        SELECT s.* FROM songs s
+        LEFT JOIN song_features sf on s.song_id = sf.song_id
+        WHERE sf.song_id IS NULL;
+    '''
 
     engine = get_engine()
     with engine.connect() as conn:
@@ -994,7 +1001,7 @@ if __name__=='__main__':
     SONG_FEATURES = False
     FEATURIZE_TOP_SONGS = False
     FEATURIZE_DATA_SET = False
-    FEATURIZE_MISSING_SONGS = False
+    FEATURIZE_MISSING_SONGS = True
     LOAD_FEATURES = False
     TEST_COOKIES = False
     
