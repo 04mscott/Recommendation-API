@@ -9,6 +9,7 @@ import pandas as pd
 import numpy as np
 import random
 import utils
+import os
 
 
 def check_user_time(user_id: str, t: bool = True) -> bool:
@@ -31,6 +32,60 @@ def check_user_time(user_id: str, t: bool = True) -> bool:
     except Exception as e:
         print(f'Error checking user_id: {e}')
         return False
+
+def get_user_stats(user_id: str) -> dict[str, any]:
+
+    response = {
+        'songs_analyzed': 0,
+        'num_recs': 0,
+        'recent_like': None,
+        'num_likes': 0,
+        'percent': 0
+    }
+
+    engine = utils.get_engine()
+
+    q1 = text('''
+        SELECT song_id, recommended, last_updated
+        FROM user_song_interactions
+        WHERE user_id = :user_id;
+    ''')
+
+    with engine.connect() as conn:
+        songs = pd.read_sql(q1, conn, params={'user_id': user_id})
+            
+    if songs.empty:
+        return response
+
+    q2 = text('''
+        SELECT song_id FROM song_features
+        WHERE song_id IN :song_ids;
+    ''')
+
+    song_ids = tuple(songs['song_id'].to_list())
+    with engine.connect() as conn:
+        features = pd.read_sql(q2, conn, params={'song_ids': song_ids})
+    
+    response['songs_analyzed'] = len(features)
+
+    response['num_recs'] = len(songs[songs['recommended'].notna()])
+    response['num_likes'] = len(songs[songs['recommended'] == 'liked'])
+
+
+    liked_songs = songs[songs['recommended'] == 'liked']
+    if not liked_songs.empty:
+        most_recent = liked_songs.sort_values(by='last_updated', ascending=False).iloc[0]['song_id']
+        q3 = text('SELECT title FROM songs WHERE song_id = :song_id')
+        with engine.connect() as conn:
+            song = conn.execute(q3, {'song_id': most_recent}).fetchone()
+        response['recent_like'] = song[0] if song else None
+    else:
+        response['recent_like'] = None
+
+    
+    response['percent'] = round(float(100 * (response['num_likes'] / response['num_recs'])), 2) if response['num_recs'] > 0 else 0.0
+
+    return response
 
 def recommend_songs(user_id: str | None = None, top_n: int = 20, noise_factor: int = 0.1) -> dict[str, list[str]]:
 
@@ -268,7 +323,8 @@ if __name__=='__main__':
     REC_WEIGHTS = False
     SAVED_WEIGHTS = False
     MEAN_VECTOR = False
-    RECOMMEND = True
+    RECOMMEND = False
+    STATS = True
 
     load_dotenv()
 
@@ -349,4 +405,9 @@ if __name__=='__main__':
         recs = recommend_songs(user_id, top_n=20)
         for rec in recs:
             print(rec['title'])
+
+    if STATS:
+        user_id = os.getenv('TEST_ID_2')
+        response = get_user_stats(user_id)
+        print(response)
         

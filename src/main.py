@@ -25,6 +25,12 @@ class Message(BaseModel):
 class Status(BaseModel):
     message: str
 
+class Stats(BaseModel):
+    songs_analyzed: int = 0
+    num_recs: int = 0
+    recent_like: str | None = None
+    num_likes: int = 0
+    percent: int = 0
 
 ''' API ENDPOINTS'''
 @app.get("/status/{task_id}", response_model = Status)
@@ -78,6 +84,16 @@ def get_recommendation(
     except Exception as e:
         logging.error(f"Error recommending songs for user {user_id}: {e}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail='An unexpected error occurred while recommending songs.')
+
+@app.get('/get-stats/{user_id}', response_model = Stats)
+def get_stats(
+    user_id: str, 
+    fastapi_token: str = Header(..., alias="Authorization")
+) -> Stats:
+    
+    logging.info("User request received")
+    utils.validate_fastapi_token(fastapi_token)
+    return recommend.get_user_stats(user_id)
 
 @app.post('/save-data', response_model = Message)
 def save_data(
