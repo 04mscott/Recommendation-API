@@ -33,6 +33,10 @@ class Stats(BaseModel):
     percent: int = 0
 
 ''' API ENDPOINTS'''
+@app.get('/ping')
+def ping():
+    return {'message', 'pong from rec engine api'}
+
 @app.get("/status/{task_id}", response_model = Status)
 def get_task_status(task_id: str):
     task = AsyncResult(task_id, app=celery)
