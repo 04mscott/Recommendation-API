@@ -4,3 +4,4 @@ __pycache__/
 venv/
 dump.rdb
 *.wav
+.vscode
