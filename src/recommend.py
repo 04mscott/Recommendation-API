@@ -1,4 +1,3 @@
-
 from sklearn.metrics.pairwise import cosine_similarity
 from pandas import DataFrame, Series
 from fastapi import HTTPException
@@ -23,11 +22,16 @@ def check_user_time(user_id: str, t: bool = True) -> bool:
         with engine.connect() as conn:
             user_data = pd.read_sql(query, conn, params={'user_id': user_id})
 
-        if len(user_data) == 0:
+        if user_data.empty:
             return False
+        
+        if not t:
+            return True
 
-        last_updated = user_data['last_updated'].values[0]
-        return t or (pd.Timestamp.now() - last_updated).total_seconds() / 3600 < 24
+        last_updated = pd.to_datetime(user_data['last_updated'].iloc[0])
+        hours_elapsed = (pd.Timestamp.now() - last_updated).total_seconds() / 3600
+
+        return hours_elapsed < 24
 
     except Exception as e:
         print(f'Error checking user_id: {e}')
@@ -36,6 +40,8 @@ def check_user_time(user_id: str, t: bool = True) -> bool:
 def get_user_stats(user_id: str) -> dict[str, any]:
 
     response = {
+        'email': None,
+        'img_url': None,
         'songs_analyzed': 0,
         'num_recs': 0,
         'recent_like': None,
@@ -44,6 +50,22 @@ def get_user_stats(user_id: str) -> dict[str, any]:
     }
 
     engine = utils.get_engine()
+
+    q0 = '''
+        SELECT email, profile_img_url from users
+        WHERE user_id = :user_id;
+    '''
+
+    with engine.connect() as conn:
+        user = pd.read_sql(q0, conn, params={'user_id': user_id})
+
+    if len(user) == 0:
+        return response
+    
+    response['email'] = user['email'].iloc[0]
+    img_url = user['profile_img_url'].iloc[0]
+    if pd.notnull(img_url) and img_url.strip() != '':
+        response['img_url'] = img_url
 
     q1 = text('''
         SELECT song_id, recommended, last_updated
@@ -139,26 +161,6 @@ def recommend_songs(user_id: str | None = None, top_n: int = 20, noise_factor: i
 
     song_ids = recommended_songs['song_id'].to_list()
     return {'song_ids': song_ids}
-
-    # query = text("""
-    #     SELECT 
-    #         s.song_id,
-    #         s.title,
-    #         GROUP_CONCAT(a.name ORDER BY a.name SEPARATOR ', ') AS artists,
-    #         s.img_url,
-    #         s.preview_url
-    #     FROM songs s
-    #     LEFT JOIN song_artist_interactions sai ON s.song_id = sai.song_id
-    #     LEFT JOIN artists a ON sai.artist_id = a.artist_id
-    #     WHERE s.song_id IN :song_ids
-    #     GROUP BY s.song_id, s.title, s.img_url, s.preview_url;
-    # """)
-    
-    # engine = utils.get_engine()
-    # with engine.connect() as conn:
-    #     songs = pd.read_sql(query, conn, params={'song_ids': tuple(song_ids)})
-
-    # return songs.to_dict(orient='records')
 
 def get_top_weights(song_ids: list[str], alpha: int = 0.05) -> dict[str, float]:
     if len(song_ids) == 0:

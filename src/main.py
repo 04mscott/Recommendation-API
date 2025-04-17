@@ -58,36 +58,24 @@ def get_recommendation(
     utils.validate_fastapi_token(fastapi_token)
 
     user_id = user.user_id
-    generic = False
     recs = {}
     
     try:
-        if not recommend.check_user_time(user_id):
-            try:
-                result = utils.top_tracks_for_recs(spotify_token, user_id)
-                if result != 1:
-                    generic = True
-                    recs = recommend.recommend_songs()
-            except Exception as e:
-                logging.info(f'Error getting top tracks for user {user_id} (user likely has no top tracks): {e}')
-                
-        if not generic:
+        # Check if user exists
+        if recommend.check_user_time(user_id, t=False):
             recs = recommend.recommend_songs(user_id)
-
-        logging.info(f"Successfully retrieved {'generic' if generic else 'personalized'} recommendations for user {user_id}")
-        return {
-                'user_id': user_id,
-                'total': len(recs['song_ids']),
-                'song_ids': recs['song_ids']
-            }
+        else:
+            recs = recommend.recommend_songs(noise_factor=0.7)
     
-    except HTTPException as http_err:
-        logging.warning(f"HTTP error for user {user_id}: {http_err.detail}")
-        raise
-
     except Exception as e:
         logging.error(f"Error recommending songs for user {user_id}: {e}\n{traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail='An unexpected error occurred while recommending songs.')
+        recs = recommend.recommend_songs(noise_factor=0.7)
+
+    return {
+        'user_id': user_id,
+        'total': len(recs['song_ids']),
+        'song_ids': recs['song_ids']
+    }
 
 @app.get('/get-stats/{user_id}', response_model = Stats)
 def get_stats(
