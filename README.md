@@ -4,7 +4,7 @@ A high-performance, asynchronous music recommendation system that integrates Spo
 
 ---
 
-## 🚀 Overview
+## Overview
 
 This project serves as the backend engine for a full-stack music recommender system. It takes in a Spotify track and returns similar songs by leveraging audio embeddings, cosine similarity, and external API lookups. The system is built for scalability, fast response time, and integration with modern client-side applications.
 
