@@ -1,4 +1,4 @@
-# 🎵 Music Recommender API
+# Music Recommender API
 
 A high-performance, asynchronous music recommendation system that integrates Spotify and YouTube APIs to deliver personalized track suggestions using semantic similarity. Built with FastAPI, Celery, Redis, and Docker, this API is designed to work seamlessly with a custom **React + Spring Boot frontend application** as part of a full-stack music recommendation platform.
 
@@ -12,20 +12,20 @@ This project serves as the backend engine for a full-stack music recommender sys
 ![project diagram](https://raw.githubusercontent.com/04mscott/Recommendation-API/refs/heads/main/assets/api_flowchart.png)
 ---
 
-## 🧠 Core Features
+## Core Features
 
-- ⚡ **FastAPI Backend:** Lightweight and async-ready API endpoints
-- 🧵 **Celery Task Queue:** Handles time-consuming Spotify/YouTube processing in the background
-- 🧠 **Embedding-Based Similarity:** Finds semantically similar songs using vector math
-- 🔁 **YouTube Integration:** Retrieves video links for recommended tracks with rate-limiting support
-- 🧊 **Redis:** Used for task management, exponential backoff, and API key retries
-- 🐬 **MySQL Storage:** Persists user input and recommendation metadata
-- 📦 **Dockerized:** Production-ready deployment setup with containerization
-- 🔒 **Token Authentication:** Protects endpoints from unauthorized access
+- **FastAPI Backend:** Lightweight and async-ready API endpoints
+- **Celery Task Queue:** Handles time-consuming Spotify/YouTube processing in the background
+- **Embedding-Based Similarity:** Finds semantically similar songs using vector math
+- **YouTube Integration:** Retrieves video links for recommended tracks with rate-limiting support
+- **Redis:** Used for task management, exponential backoff, and API key retries
+- **MySQL Storage:** Persists user input and recommendation metadata
+- **Dockerized:** Production-ready deployment setup with containerization
+- **Token Authentication:** Protects endpoints from unauthorized access
 
 ---
 
-## 📂 Project Structure
+## Project Structure
 ```bash
 Recommendation-API
 ├── src/
@@ -43,9 +43,9 @@ Recommendation-API
 ```
 ---
 
-## 🧪 Example Use Case
+## Example Use Case
 
-1. A new user logs into the BeatMatch app.
+1. A new user logs into the Impulse app.
 2. The Spring Boot backend sends a `POST` request to the `/save-data` endpoint.
 4. A Celery task is triggered to:
    - Fetch all songs associated with user's Spotify acount
@@ -60,7 +60,7 @@ Recommendation-API
 
 ---
 
-## 📈 Future Improvements
+## Future Improvements
 
 - Add JWT-based multi-user authentication
 - Introduce collaborative filtering or hybrid models
@@ -69,17 +69,17 @@ Recommendation-API
 
 ---
 
-## 🧑‍💻 Author
+## Author
 
-**Mason Scott**  
-Third year CS major (Data Science track), Statistics minor  
-University of Maryland – College Park  
-🌐 Website: [masonscott.net](https://masonscott.net)  
-🐙 GitHub: [04mscott](https://github.com/04mscott)  
-🔗 LinkedIn: [Mason Scott](https://www.linkedin.com/in/mason-t-scott/)
+**Mason Scott**    
+B.S. in Computer Science from University of Maryland – College Park
+Data Science track, Statistics Minor
+Website: [masonscott.net](https://masonscott.net)  
+GitHub: [04mscott](https://github.com/04mscott)  
+LinkedIn: [Mason Scott](https://www.linkedin.com/in/mason-t-scott/)
 
 ---
 
-## 📌 Notes
+## Notes
 
 > This API was built specifically to serve a React + Spring Boot app for a full-stack music recommendation system. It is designed to run in Docker containers with background task support and optimized external API interaction. While setup and deployment details are not included in this README, the system is fully containerized and production-ready.
